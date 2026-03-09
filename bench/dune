@@ -1,0 +1,8 @@
+(executable
+ (name gen_data)
+ (modules gen_data))
+
+(executable
+ (name bench_ocaml)
+ (modules bench_ocaml)
+ (libraries elias_fano))

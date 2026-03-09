@@ -1,0 +1,4 @@
+_build/
+_opam/
+bench/sux/sux-repo/
+bench/sux/bench_sux

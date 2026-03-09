@@ -1,0 +1,12 @@
+(rocq.extraction
+ (prelude Extract)
+ (extracted_modules EliasFanoOcaml)
+ (theories EliasFano Stdlib))
+
+(library
+ (name elias_fano)
+ (modules elias_fano EliasFanoOcaml)
+ (foreign_stubs
+  (language c)
+  (names elias_fano_stubs)
+  (flags :standard -O2 -march=native)))
