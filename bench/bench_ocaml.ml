@@ -31,10 +31,13 @@ let () =
   Printf.printf "ocaml encode: %.1f us (%d elements)\n" encode_us n;
 
   (* Decode *)
-  let (_decoded, decode_us) = time_us (fun () ->
+  let (decoded, decode_us) = time_us (fun () ->
     Elias_fano.decode ef
   ) in
   Printf.printf "ocaml decode_all: %.1f us\n" decode_us;
+  let sum = List.fold_left (+) 0 decoded in
+  Printf.printf "ocaml decode_check: n=%d first=%d last=%d sum=%d\n"
+    n (List.hd decoded) (List.nth decoded (n - 1)) sum;
 
   (* Process queries *)
   (try while true do

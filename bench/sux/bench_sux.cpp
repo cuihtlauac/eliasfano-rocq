@@ -43,6 +43,14 @@ int main() {
 
     double decode_us = std::chrono::duration<double, std::micro>(t3 - t2).count();
     std::cout << "sux decode_all: " << decode_us << " us" << std::endl;
+    {
+        uint64_t first = ef.select(0), last = ef.select(n - 1);
+        uint64_t sum = 0;
+        for (uint64_t i = 0; i < n; i++) sum += ef.select(i);
+        std::cout << "sux decode_check: n=" << n
+                  << " first=" << first << " last=" << last
+                  << " sum=" << sum << std::endl;
+    }
 
     // Process queries
     while (std::getline(std::cin, line)) {

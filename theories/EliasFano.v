@@ -406,6 +406,80 @@ Proof.
   replace (i - 0)%nat with i by lia. lia.
 Qed.
 
+Lemma count_occ_build_upper_aux :
+  forall uppers prev,
+    count_occ Bool.bool_dec (build_upper_aux uppers prev) true = length uppers.
+Proof.
+  induction uppers as [|u rest IH]; intros prev.
+  - reflexivity.
+  - cbn [build_upper_aux].
+    rewrite count_occ_app. simpl count_occ at 1.
+    rewrite count_occ_repeat_neq by discriminate.
+    destruct (Bool.bool_dec true true) as [_|Habs]; [|contradiction].
+    simpl. rewrite IH. lia.
+Qed.
+
+Lemma count_occ_build_upper :
+  forall uppers,
+    count_occ Bool.bool_dec (build_upper uppers) true = length uppers.
+Proof.
+  intros. unfold build_upper. apply count_occ_build_upper_aux.
+Qed.
+
+Lemma length_build_upper_aux :
+  forall uppers prev,
+    Forall (fun u => prev <= u) uppers ->
+    sorted uppers ->
+    Z.of_nat (length (build_upper_aux uppers prev)) =
+      match uppers with
+      | [] => 0
+      | _ => last uppers 0 - prev + Z.of_nat (length uppers)
+      end.
+Proof.
+  induction uppers as [|u rest IH]; intros prev Hge Hsort.
+  - reflexivity.
+  - simpl build_upper_aux. rewrite length_app, repeat_length.
+    inversion Hge as [|? ? Hu_ge Hge_rest]; subst.
+    inversion Hsort as [|? ? Hsort_rest HF_le]; subst.
+    destruct rest as [|v rest'].
+    + simpl. simpl last.
+      rewrite Nat2Z.inj_add. rewrite Z2Nat.id by lia. simpl. lia.
+    + assert (Hv_ge : Forall (fun w => u <= w) (v :: rest')).
+      { revert HF_le. apply Forall_impl. lia. }
+      (* length = Z.to_nat(u - prev) + length([true] ++ build_upper_aux (v :: rest') u) *)
+      (* = Z.to_nat(u - prev) + 1 + length(build_upper_aux (v :: rest') u) *)
+      assert (Hlen_rest : Z.of_nat (length (build_upper_aux (v :: rest') u))
+        = last (v :: rest') 0%Z - u + Z.of_nat (length (v :: rest'))).
+      { exact (IH u Hv_ge Hsort_rest). }
+      assert (Hlast_ge_u : u <= last (v :: rest') 0%Z).
+      { rewrite Forall_forall in Hv_ge. apply Hv_ge.
+        assert (Hne' : v :: rest' <> []) by discriminate.
+        rewrite (app_removelast_last 0%Z Hne') at 2.
+        apply in_or_app. right. left. reflexivity. }
+      (* Goal: Z.of_nat(Z.to_nat(u-prev) + length([true]++bua(v::rest', u)))
+              = last(v::rest') 0 - prev + Z.of_nat(length(u::v::rest')) *)
+      rewrite Nat2Z.inj_add. rewrite Z2Nat.id by lia.
+      change (length (true :: build_upper_aux (v :: rest') u))
+        with (S (length (build_upper_aux (v :: rest') u))).
+      rewrite Nat2Z.inj_succ. rewrite Hlen_rest.
+      change (last (u :: v :: rest') 0%Z) with (last (v :: rest') 0%Z).
+      change (length (u :: v :: rest')) with (S (length (v :: rest'))).
+      rewrite Nat2Z.inj_succ. lia.
+Qed.
+
+Lemma length_build_upper :
+  forall uppers,
+    uppers <> [] ->
+    Forall (fun u => 0 <= u) uppers ->
+    sorted uppers ->
+    Z.of_nat (length (build_upper uppers)) =
+      last uppers 0 + Z.of_nat (length uppers).
+Proof.
+  intros uppers Hne Hnn Hsort.
+  unfold build_upper. rewrite (length_build_upper_aux uppers 0 Hnn Hsort).
+  destruct uppers; [contradiction|]. simpl. lia.
+Qed.
+
 (* --- nth of map helper --- *)
 Lemma nth_map_safe :
   forall {A B : Type} (f : A -> B) (xs : list A) (i : nat) (da : A) (db : B),

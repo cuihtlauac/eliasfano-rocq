@@ -23,7 +23,7 @@ oracle_check() {
   local sux_file="$1" ocaml_file="$2"
   local MISMATCHES=0
   while IFS= read -r sux_line; do
-    if [[ "$sux_line" == sux\ access* ]] || [[ "$sux_line" == sux\ nextGEQ* ]]; then
+    if [[ "$sux_line" == sux\ access* ]] || [[ "$sux_line" == sux\ nextGEQ* ]] || [[ "$sux_line" == sux\ decode_check* ]]; then
       query=$(echo "$sux_line" | sed 's/sux //' | sed 's/ \[.*$//')
       ocaml_line=$(grep "ocaml ${query%%=*}" "$ocaml_file" 2>/dev/null | head -1 || true)
       if [ -n "$ocaml_line" ]; then

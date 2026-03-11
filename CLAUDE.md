@@ -2,8 +2,8 @@
 
 ## Build
 
-Always prefix shell commands with `eval $(opam env) &&` to pick up the local opam switch.
+Use `./build.sh` (wrapper around `opam exec -- dune build`).
 
 ```
-eval $(opam env) && dune build
+./build.sh
 ```
