@@ -2,7 +2,10 @@
 
     Efficient implementation using machine integers and primitive arrays.
     Agreement with the Z/list proofs in [EliasFano.v] is established
-    via axioms (to be filled in incrementally).
+    for all operations.
+
+    The only remaining axioms are [popcount_spec] (backed by a C stub)
+    and [bv_select_agrees] (popcount-based bitvector scan).
 
     [Print Assumptions] on each top-level theorem shows exactly
     which axioms remain. *)
@@ -78,7 +81,7 @@ Fixpoint bv_select_aux (bv : array int) (remaining w_idx : int)
   | S fuel' =>
       let word := bv.[w_idx] in
       let pc := popcount word in
-      if leb remaining pc then
+      if ltb remaining pc then
         add (mul w_idx wbits)
             (tail0 (clear_n_ones word (Z.to_nat (to_Z remaining))))
       else
@@ -168,22 +171,19 @@ Definition bit_size63 (enc : ef63) : int :=
   mul (ef63_n enc) (add (ef63_l enc) 2).
 
 (* ================================================================= *)
-(* Part 5: Axioms — hard lemmas, to be proved incrementally            *)
+(* Part 5: Axioms and specification lemmas                             *)
 (* ================================================================= *)
 
-(** Each axiom is an independent work item. [Print Assumptions]
-    on the final theorems lists exactly which remain open. *)
+(** Count one-bits in positions [0..n) of [z], accumulator style. *)
+Fixpoint Z_count_bits (z : Z) (n : nat) (acc : nat) : nat :=
+  match n with
+  | O => acc
+  | S n' => Z_count_bits z n' (if Z.testbit z (Z.of_nat n') then S acc else acc)
+  end.
 
 (** A1: popcount counts one-bits correctly. *)
 Axiom popcount_spec : forall (x : int),
-  Z.of_nat (
-    let fix count_bits (n : nat) (acc : nat) :=
-      match n with
-      | O => acc
-      | S n' => count_bits n' (if Z.testbit (to_Z x) (Z.of_nat n') then S acc else acc)
-      end
-    in count_bits 63%nat 0%nat
-  ) = to_Z (popcount x).
+  Z.of_nat (Z_count_bits (to_Z x) 63%nat 0%nat) = to_Z (popcount x).
 
 (** A2: [ilog2_63] agrees with [Z.log2]. *)
 Lemma ilog2_63_spec : forall x : int,
@@ -641,6 +641,91 @@ Proof.
         rewrite Hlen_decomp. rewrite Hnp. lia.
 Qed.
 
+(** Helper: [fill_upper] doesn't touch positions [>= pos + len(build_upper)]. *)
+Lemma fill_upper_get_ge : forall xs l bv pos prev q,
+  to_Z pos + Z.of_nat (List.length
+    (build_upper_aux (map (fun x => upper_value (to_Z l) (to_Z x)) xs) (to_Z prev))) < wB ->
+  Forall (fun x => to_Z prev <= upper_value (to_Z l) (to_Z x)) xs ->
+  sorted (map (fun x => upper_value (to_Z l) (to_Z x)) xs) ->
+  0 <= to_Z l ->
+  (forall p', to_Z pos <= to_Z p' ->
+     to_Z p' < to_Z pos + Z.of_nat (List.length
+       (build_upper_aux (map (fun x => upper_value (to_Z l) (to_Z x)) xs) (to_Z prev))) ->
+     (p' / wbits <? PArray.length bv)%uint63 = true) ->
+  (to_Z pos + Z.of_nat (List.length
+    (build_upper_aux (map (fun x => upper_value (to_Z l) (to_Z x)) xs) (to_Z prev))) <= to_Z q)%Z ->
+  bv_get (fill_upper xs l bv pos prev) q = bv_get bv q.
+Proof.
+  induction xs as [|x xs' IH]; intros l bv pos prev q Hovf HFA Hsorted Hl Hbounds Hq.
+  - reflexivity.
+  - rewrite Forall_cons_iff in HFA; destruct HFA as [Hhead HFA_tail].
+    unfold sorted in Hsorted; cbn [map] in Hsorted.
+    inversion Hsorted as [|? ? Hsorted_tail HFA_ge]; subst.
+    pose proof (to_Z_bounded pos) as Hpos_bnd.
+    pose proof (to_Z_bounded prev) as Hprev_bnd.
+    pose proof (to_Z_bounded (x >> l)) as Hu_bnd.
+    assert (Hu_eq : to_Z (x >> l) = upper_value (to_Z l) (to_Z x))
+      by (apply lsr_upper_value; exact Hl).
+    assert (Hprev_le_u : to_Z prev <= to_Z (x >> l))
+      by (rewrite Hu_eq; exact Hhead).
+    remember (Z.of_nat (List.length
+      (build_upper_aux (map (fun x0 => upper_value (to_Z l) (to_Z x0)) xs')
+         (upper_value (to_Z l) (to_Z x))))) as tail_len eqn:Htl_def.
+    pose proof (Nat2Z.is_nonneg (List.length
+      (build_upper_aux (map (fun x0 => upper_value (to_Z l) (to_Z x0)) xs')
+         (upper_value (to_Z l) (to_Z x))))) as Htl_nn.
+    assert (Hlen_decomp :
+      Z.of_nat (List.length
+        (build_upper_aux
+           (map (fun x0 => upper_value (to_Z l) (to_Z x0)) (x :: xs'))
+           (to_Z prev))) =
+      ((to_Z (x >> l) - to_Z prev) + 1 + tail_len)%Z).
+    { rewrite Htl_def, Hu_eq.
+      cbn [map build_upper_aux].
+      rewrite !length_app, repeat_length.
+      simpl Datatypes.length.
+      rewrite !Nat2Z.inj_add, Z2Nat.id by lia. lia. }
+    assert (Hgap : to_Z (sub (x >> l) prev) = (to_Z (x >> l) - to_Z prev)%Z).
+    { apply sub_nonneg; [lia|].
+      unfold wB; change Uint63.wB with (2^63)%Z in *; lia. }
+    assert (Hnp : to_Z (add pos (sub (x >> l) prev)) =
+                  (to_Z pos + (to_Z (x >> l) - to_Z prev))%Z).
+    { rewrite Uint63.add_spec, Hgap. rewrite Z.mod_small; [lia|].
+      change Uint63.wB with (2^63)%Z; unfold wB in *; lia. }
+    assert (Hnp1 : to_Z (add (add pos (sub (x >> l) prev)) 1) =
+                   (to_Z pos + (to_Z (x >> l) - to_Z prev) + 1)%Z).
+    { rewrite Uint63.add_spec; change (to_Z 1) with 1%Z.
+      rewrite Hnp. rewrite Z.mod_small; [lia|].
+      change Uint63.wB with (2^63)%Z; unfold wB in *; lia. }
+    assert (HFA' : Forall (fun x0 => to_Z (x >> l) <=
+                     upper_value (to_Z l) (to_Z x0)) xs').
+    { rewrite Hu_eq. apply Forall_map. exact HFA_ge. }
+    assert (Hlen_bv : PArray.length (bv_set bv (add pos (sub (x >> l) prev))) =
+                      PArray.length bv)
+      by (unfold bv_set; apply length_set').
+    cbn [fill_upper].
+    transitivity (bv_get (bv_set bv (add pos (sub (x >> l) prev))) q).
+    + apply IH.
+      * rewrite Hnp1, Hu_eq, <- Htl_def.
+        rewrite Hlen_decomp in Hovf. unfold wB in *. lia.
+      * exact HFA'.
+      * exact Hsorted_tail.
+      * exact Hl.
+      * intros p' Hp'1 Hp'2. rewrite Hlen_bv.
+        rewrite Hu_eq, <- Htl_def in Hp'2.
+        apply Hbounds.
+        -- rewrite Hnp1 in Hp'1; lia.
+        -- rewrite Hlen_decomp. rewrite Hnp1 in Hp'1. lia.
+      * rewrite Hnp1, Hu_eq, <- Htl_def. rewrite Hlen_decomp in Hq. lia.
+    + apply bv_get_bv_set_other.
+      * intro Heq.
+        assert (Hc : to_Z (add pos (sub (x >> l) prev)) = to_Z q)
+          by (rewrite Heq; reflexivity).
+        rewrite Hnp in Hc. rewrite Hlen_decomp in Hq. lia.
+      * apply Hbounds; [rewrite Hnp; lia|].
+        rewrite Hlen_decomp. rewrite Hnp. lia.
+Qed.
+
 (** Generalized [fill_upper] agreement — induction-ready version. *)
 Lemma fill_upper_agrees_gen : forall xs l bv pos prev,
   0 <= to_Z l ->
@@ -877,13 +962,834 @@ Proof.
   - exact Hi.
 Qed.
 
-(** A6: [bv_select] agrees with [position_of_ith_one]. *)
-Axiom bv_select_agrees : forall bv bv_list target,
+(* ================================================================= *)
+(* Part 5b: bv_select proof infrastructure                            *)
+(* ================================================================= *)
+
+(** Z-level: for odd q and n >= 1, subtracting 1 doesn't change
+    the quotient by 2^n. *)
+Lemma div_odd_sub1 : forall q n,
+  (q mod 2 = 1)%Z -> (1 <= n)%Z ->
+  ((q - 1) / 2 ^ n = q / 2 ^ n)%Z.
+Proof.
+  intros q n Hodd Hn.
+  assert (Hp : (0 < 2 ^ n)%Z) by (apply Z.pow_pos_nonneg; lia).
+  assert (Hdiv : (2 | 2 ^ n)%Z).
+  { exists (2 ^ (n - 1))%Z. rewrite Z.mul_comm.
+    change 2%Z with (2 ^ 1)%Z. rewrite <- Z.pow_add_r by lia.
+    replace (1 + (n - 1))%Z with n by lia. reflexivity. }
+  symmetry.
+  apply (Z.div_unique (q - 1) (2 ^ n) (q / 2 ^ n) (q mod 2 ^ n - 1)).
+  - left. split.
+    + assert (Hqmod_ne0 : (q mod 2 ^ n <> 0)%Z).
+      { intro Habs.
+        assert (H2 : (q mod 2 ^ n mod 2 = 0)%Z) by (rewrite Habs; reflexivity).
+        rewrite Z.mod_mod_divide in H2 by exact Hdiv. lia. }
+      pose proof (Z.mod_pos_bound q (2 ^ n) ltac:(lia)). lia.
+    + pose proof (Z.mod_pos_bound q (2 ^ n) ltac:(lia)). lia.
+  - pose proof (Z.div_mod q (2 ^ n) ltac:(lia)). lia.
+Qed.
+
+(** Z-level: [Z.land x (x-1)] clears the lowest set bit. *)
+Lemma land_pred_clearbit : forall x k,
+  (0 < x)%Z -> (0 <= k)%Z ->
+  Z.testbit x k = true ->
+  (forall j, (0 <= j < k)%Z -> Z.testbit x j = false) ->
+  Z.land x (x - 1) = Z.clearbit x k.
+Proof.
+  intros x k Hpos Hk Hbit Hbelow.
+  apply Z.bits_inj'. intros i Hi.
+  rewrite Z.land_spec, Z.clearbit_spec', Z.ldiff_spec, Z.pow2_bits_eqb by lia.
+  destruct (Z.testbit x i) eqn:Hxi; simpl.
+  2: reflexivity.
+  assert (Hik : i = k \/ k < i).
+  { destruct (Z.eq_dec i k); [left; auto | right].
+    destruct (Z.lt_ge_cases i k);
+      [exfalso; rewrite Hbelow in Hxi; [discriminate | lia] | lia]. }
+  assert (Hp2k : (0 < 2 ^ k)%Z) by (apply Z.pow_pos_nonneg; lia).
+  assert (Hxmod : (x mod 2 ^ k = 0)%Z).
+  { rewrite <- Z.land_ones by lia.
+    apply Z.bits_inj'. intros j Hj.
+    rewrite Z.land_spec, Z.bits_0, Z.testbit_ones_nonneg by lia.
+    destruct (Z.ltb_spec j k);
+      [rewrite andb_true_r; apply Hbelow; lia
+      |rewrite andb_false_r; reflexivity]. }
+  set (q := (x / 2 ^ k)%Z).
+  assert (Hx_eq : x = (2 ^ k * q)%Z)
+    by (apply Z.div_exact in Hxmod; [exact Hxmod | lia]).
+  assert (Hq_odd : (q mod 2 = 1)%Z)
+    by (apply Z.testbit_true in Hbit; [|lia];
+        change ((x / 2 ^ k) mod 2 = 1)%Z in Hbit; fold q in Hbit;
+        exact Hbit).
+  assert (Hq_pos : (0 < q)%Z).
+  { rewrite Hx_eq in Hpos. apply Z.lt_0_mul in Hpos.
+    destruct Hpos; lia. }
+  assert (Hsub : (x - 1 = (q - 1) * 2 ^ k + (2 ^ k - 1))%Z) by lia.
+  destruct Hik as [<- | Hgt].
+  - rewrite Z.eqb_refl. simpl.
+    apply Z.testbit_false; [lia|].
+    rewrite Hsub.
+    rewrite Z_div_plus_full_l by lia.
+    rewrite Z.div_small by lia.
+    rewrite Z.add_0_r, Zminus_mod, Hq_odd. simpl. reflexivity.
+  - assert (Hne : (k =? i)%Z = false) by (apply Z.eqb_neq; lia).
+    rewrite Hne. simpl.
+    apply Z.testbit_true; [lia|].
+    apply Z.testbit_true in Hxi; [|lia].
+    rewrite Hx_eq in Hxi.
+    replace (2 ^ i)%Z with (2 ^ k * 2 ^ (i - k))%Z in Hxi.
+    2: { change 2%Z with (2 ^ 1)%Z. rewrite <- Z.pow_add_r by lia.
+         f_equal. lia. }
+    rewrite Z.div_mul_cancel_l in Hxi
+      by (try apply Z.pow_nonzero; lia).
+    rewrite Hsub.
+    replace (2 ^ i)%Z with (2 ^ k * 2 ^ (i - k))%Z.
+    2: { change 2%Z with (2 ^ 1)%Z. rewrite <- Z.pow_add_r by lia.
+         f_equal. lia. }
+    rewrite <- Z.div_div by lia.
+    rewrite Z_div_plus_full_l by lia.
+    rewrite Z.div_small with (a := (2 ^ k - 1)%Z) by lia.
+    rewrite Z.add_0_r.
+    rewrite div_odd_sub1 by (exact Hq_odd || lia).
+    exact Hxi.
+Qed.
+
+(** [tail0] characterization: it gives the position of the lowest set bit. *)
+Lemma tail0_lowest_bit : forall x : int,
+  (0 < to_Z x)%Z ->
+  Z.testbit (to_Z x) (to_Z (tail0 x)) = true /\
+  (forall k, (0 <= k < to_Z (tail0 x))%Z -> Z.testbit (to_Z x) k = false).
+Proof.
+  intros x Hpos.
+  destruct (tail0_spec x Hpos) as [y [Hy Hfact]].
+  set (t := to_Z (tail0 x)) in *.
+  assert (Ht_nn : (0 <= t)%Z) by (pose proof (to_Z_bounded (tail0 x)); lia).
+  split.
+  - (* bit t is set *)
+    apply Z.testbit_true; [lia|].
+    rewrite Hfact.
+    rewrite Z.div_mul by (apply Z.pow_nonzero; lia).
+    rewrite Z.add_comm, Z.mul_comm, Z_mod_plus_full. reflexivity.
+  - (* bits below t are clear *)
+    intros k Hk.
+    apply Z.testbit_false; [lia|].
+    rewrite Hfact.
+    replace t with (k + (t - k))%Z by lia.
+    rewrite Z.pow_add_r by lia.
+    rewrite (Z.mul_comm (2 ^ k) (2 ^ (t - k))).
+    rewrite Z.mul_assoc.
+    rewrite Z.div_mul by (apply Z.pow_nonzero; lia).
+    replace (t - k)%Z with (1 + (t - k - 1))%Z by lia.
+    rewrite Z.pow_add_r by lia. simpl (2 ^ 1)%Z.
+    change (Z.pow_pos 2 1) with 2%Z.
+    rewrite (Z.mul_comm 2 (2 ^ (t - k - 1))).
+    rewrite Z.mul_assoc.
+    rewrite Z_mod_mult. reflexivity.
+Qed.
+
+(** Count one-bits in positions [0..j) of [x]. *)
+Fixpoint Z_count_ones (j : nat) (x : Z) : nat :=
+  match j with
+  | O => O
+  | S j' => (if Z.testbit x (Z.of_nat j') then S else id) (Z_count_ones j' x)
+  end.
+
+(** The accumulator-based [Z_count_bits] equals [Z_count_ones]. *)
+Lemma Z_count_bits_eq : forall j z acc,
+  Z_count_bits z j acc = (Z_count_ones j z + acc)%nat.
+Proof.
+  induction j as [|j' IH]; intros z acc; simpl.
+  - lia.
+  - rewrite IH. destruct (Z.testbit z (Z.of_nat j')); unfold id; lia.
+Qed.
+
+Local Open Scope Z_scope.
+
+Lemma Z_count_ones_S : forall j x,
+  Z.of_nat (Z_count_ones (S j) x) =
+  Z.of_nat (Z_count_ones j x) + (if Z.testbit x (Z.of_nat j) then 1 else 0).
+Proof.
+  intros; simpl; destruct (Z.testbit x (Z.of_nat j)).
+    rewrite Nat2Z.inj_succ; lia.
+    unfold id; lia.
+Qed.
+
+Lemma Z_count_ones_step : forall j' x,
+  Z.of_nat (Z_count_ones (S j') x) =
+  (Z.of_nat (Z_count_ones j' x) + (if Z.testbit x (Z.of_nat j') then 1 else 0))%Z.
+Proof.
+  intros; simpl; destruct (Z.testbit x (Z.of_nat j')).
+    rewrite Nat2Z.inj_succ; lia.
+    unfold id; lia.
+Qed.
+(** Popcount restated: [popcount x = Z_count_ones 63 (to_Z x)]. *)
+Lemma popcount_count_ones : forall x : int,
+  Z.of_nat (Z_count_ones 63 (to_Z x)) = to_Z (popcount x).
+Proof.
+  intros.
+  rewrite <- popcount_spec.
+  f_equal.
+  rewrite Z_count_bits_eq. lia.
+Qed.
+
+(** Lift [land_pred_clearbit] to Int63: [x land (x-1)] at Int63 level
+    clears the lowest set bit, provided no overflow. *)
+Lemma land_sub1_clears_lowest_bit : forall (x : int),
+  (0 < to_Z x)%Z ->
+  to_Z (x land (x - 1)) = Z.land (to_Z x) (to_Z x - 1).
+Proof.
+  intros x Hpos.
+  rewrite land_spec'.
+  rewrite sub_spec.
+  change (to_Z 1) with 1%Z.
+  rewrite Z.mod_small.
+  - reflexivity.
+  - pose proof (to_Z_bounded x). lia.
+Qed.
+
+(** Bits other than [k] are unchanged by [clearbit]. *)
+Lemma Z_count_ones_clearbit_other : forall j x k,
+  (j <= Z.to_nat k)%nat ->
+  Z_count_ones j (Z.clearbit x k) = Z_count_ones j x.
+Proof.
+  induction j as [|j' IH]; intros x k Hle; simpl.
+  - reflexivity.
+  - rewrite Z.clearbit_neq by lia. rewrite IH by lia. reflexivity.
+Qed.
+
+(** [Z_count_ones] decreases by 1 when the lowest set bit is cleared. *)
+Lemma Z_count_ones_clearbit : forall j x k,
+  (0 <= k)%Z ->
+  (Z.to_nat k < j)%nat ->
+  Z.testbit x k = true ->
+  (forall i, (0 <= i < k)%Z -> Z.testbit x i = false) ->
+  Z_count_ones j (Z.clearbit x k) = Nat.pred (Z_count_ones j x).
+Proof.
+  induction j as [|j' IH]; intros x k Hk Hlt Hbit Hbelow.
+  - lia.
+  - simpl.
+    destruct (Nat.eq_dec (Z.to_nat k) j') as [Heq | Hneq].
+    + (* k = j' *)
+      assert (Hk_eq : k = Z.of_nat j') by lia.
+      subst k. rewrite Z.clearbit_eq. rewrite Hbit.
+      rewrite Z_count_ones_clearbit_other by lia.
+      unfold id. lia.
+    + (* k < j' *)
+      assert (Hlt' : (Z.to_nat k < j')%nat) by lia.
+      rewrite Z.clearbit_neq by lia.
+      rewrite IH by assumption.
+      assert (Hpos : (0 < Z_count_ones j' x)%nat).
+      { clear IH Hlt Hneq.
+        induction j' as [|j'' IH2].
+        - lia.
+        - simpl. destruct (Nat.eq_dec (Z.to_nat k) j'') as [Heq2|Hneq2].
+          + assert (k = Z.of_nat j'') by lia. subst k.
+            rewrite Hbit. lia.
+          + assert ((Z.to_nat k < j'')%nat) by lia.
+            specialize (IH2 H). destruct (Z.testbit x (Z.of_nat j'')); unfold id; lia. }
+      destruct (Z.testbit x (Z.of_nat j')); unfold id; lia.
+Qed.
+
+(** [clear_n_ones word n] at the Z level clears the lowest [n] one-bits. *)
+Lemma clear_n_ones_spec : forall n (word : int),
+  (0 <= to_Z word)%Z ->
+  (n <= Z_count_ones 63 (to_Z word))%nat ->
+  Z_count_ones 63 (to_Z (clear_n_ones word n)) =
+    (Z_count_ones 63 (to_Z word) - n)%nat /\
+  (forall k, (0 <= k)%Z ->
+    Z.testbit (to_Z (clear_n_ones word n)) k = true ->
+    Z.testbit (to_Z word) k = true).
+Proof.
+  induction n as [|n' IH]; intros word Hnn Hle.
+  - simpl. split. + lia. + auto.
+  - change (clear_n_ones word (S n')) with (clear_n_ones (word land (word - 1)) n').
+    set (word' := word land (word - 1)).
+    assert (Hpos : (0 < to_Z word)%Z).
+    { destruct (Z.eq_dec (to_Z word) 0) as [Hz|Hnz]; [|lia].
+      exfalso. assert (Hc : Z_count_ones 63 (to_Z word) = 0%nat)
+        by (rewrite Hz; reflexivity). lia. }
+    pose proof (tail0_lowest_bit word Hpos) as [Htbit Htbelow].
+    set (t := to_Z (tail0 word)) in *.
+    assert (Ht_nn : (0 <= t)%Z) by (pose proof (to_Z_bounded (tail0 word)); lia).
+    assert (Hword'Z : to_Z word' = Z.clearbit (to_Z word) t).
+    { unfold word'. rewrite land_sub1_clears_lowest_bit by exact Hpos.
+      apply land_pred_clearbit; assumption. }
+    assert (Ht_lt63 : (Z.to_nat t < 63)%nat).
+    { enough (t < 63)%Z by lia.
+      destruct (Z_lt_dec t 63) as [|Hge]; [assumption|exfalso].
+      pose proof (to_Z_bounded word) as Hb.
+      assert (Hlog : (Z.log2 (to_Z word) < 63)%Z).
+      { apply Z.log2_lt_pow2; [lia|].
+        change Uint63Axioms.wB with (2 ^ 63)%Z in Hb. lia. }
+      assert (Hf : Z.testbit (to_Z word) t = false).
+      { apply Z.bits_above_log2; lia. }
+      rewrite Hf in Htbit. discriminate. }
+    assert (Hcount' : Z_count_ones 63 (to_Z word') = Nat.pred (Z_count_ones 63 (to_Z word))).
+    { rewrite Hword'Z. apply Z_count_ones_clearbit; assumption. }
+    assert (Hnn' : (0 <= to_Z word')%Z) by (pose proof (to_Z_bounded word'); lia).
+    assert (Hle' : (n' <= Z_count_ones 63 (to_Z word'))%nat) by lia.
+    destruct (IH word' Hnn' Hle') as [IHcount IHbits].
+    split.
+    + rewrite IHcount. lia.
+    + intros k Hk0 Hkbit. apply IHbits in Hkbit; [|exact Hk0].
+      rewrite Hword'Z in Hkbit.
+      rewrite Z.clearbit_spec' in Hkbit.
+      rewrite Z.ldiff_spec in Hkbit.
+      destruct (Z.testbit (to_Z word) k); simpl in Hkbit; [reflexivity | discriminate].
+Qed.
+
+(** The position found by [tail0 (clear_n_ones word n)] is the
+    position of the [n]-th one-bit in [word]. *)
+Lemma select_word_correct : forall n (word : int),
+  (0 < to_Z word)%Z ->
+  (n < Z_count_ones 63 (to_Z word))%nat ->
+  Z.testbit (to_Z word) (to_Z (tail0 (clear_n_ones word n))) = true /\
+  Z_count_ones (Z.to_nat (to_Z (tail0 (clear_n_ones word n)))) (to_Z word) = n.
+Proof.
+  induction n as [|n' IH]; intros word Hpos Hn.
+  - (* n = 0 *)
+    simpl.
+    pose proof (tail0_lowest_bit word Hpos) as [Htbit Htbelow].
+    split; [exact Htbit|].
+    set (p := to_Z (tail0 word)) in *.
+    assert (Hp_nn : (0 <= p)%Z) by (pose proof (to_Z_bounded (tail0 word)); lia).
+    enough (H : forall m, (m <= Z.to_nat p)%nat -> Z_count_ones m (to_Z word) = 0%nat)
+      by (apply H; lia).
+    induction m as [|m' IHm].
+    + intros _. reflexivity.
+    + intros Hm. simpl. replace (Z.testbit (to_Z word) (Z.of_nat m')) with false.
+      * unfold id. apply IHm. lia.
+      * symmetry. apply Htbelow. lia.
+  - (* n = S n' *)
+    change (clear_n_ones word (S n')) with (clear_n_ones (word land (word - 1)) n').
+    set (word1 := word land (word - 1)).
+    pose proof (tail0_lowest_bit word Hpos) as [Ht0bit Ht0below].
+    set (t0 := to_Z (tail0 word)) in *.
+    assert (Ht0_nn : (0 <= t0)%Z) by (pose proof (to_Z_bounded (tail0 word)); lia).
+    assert (Hw1Z : to_Z word1 = Z.clearbit (to_Z word) t0).
+    { unfold word1. rewrite land_sub1_clears_lowest_bit by exact Hpos.
+      apply land_pred_clearbit; assumption. }
+    assert (Ht0_lt63 : (Z.to_nat t0 < 63)%nat).
+    { enough (t0 < 63)%Z by lia.
+      destruct (Z_lt_dec t0 63) as [|Hge]; [assumption|exfalso].
+      pose proof (to_Z_bounded word) as Hb.
+      assert (Hlog : (Z.log2 (to_Z word) < 63)%Z).
+      { apply Z.log2_lt_pow2; [lia|].
+        change Uint63Axioms.wB with (2 ^ 63)%Z in Hb. lia. }
+      assert (Hf : Z.testbit (to_Z word) t0 = false) by (apply Z.bits_above_log2; lia).
+      rewrite Hf in Ht0bit. discriminate. }
+    assert (Hcount1 : Z_count_ones 63 (to_Z word1) = Nat.pred (Z_count_ones 63 (to_Z word))).
+    { rewrite Hw1Z. apply Z_count_ones_clearbit; assumption. }
+    assert (Hw1_pos : (0 < to_Z word1)%Z).
+    { destruct (Z.eq_dec (to_Z word1) 0) as [Hz|Hnz]; [|pose proof (to_Z_bounded word1); lia].
+      exfalso. assert (Z_count_ones 63 (to_Z word1) = 0%nat) by (rewrite Hz; reflexivity). lia. }
+    assert (Hn' : (n' < Z_count_ones 63 (to_Z word1))%nat) by lia.
+    destruct (IH word1 Hw1_pos Hn') as [IHbit IHcount].
+    set (p := to_Z (tail0 (clear_n_ones word1 n'))) in *.
+    assert (Hp_nn : (0 <= p)%Z)
+      by (pose proof (to_Z_bounded (tail0 (clear_n_ones word1 n'))); lia).
+    assert (Hword_p : Z.testbit (to_Z word) p = true).
+    { rewrite Hw1Z in IHbit.
+      rewrite Z.clearbit_spec' in IHbit.
+      rewrite Z.ldiff_spec in IHbit.
+      destruct (Z.testbit (to_Z word) p); simpl in IHbit; [reflexivity|discriminate]. }
+    split; [exact Hword_p|].
+    assert (Ht0_lt_p : (t0 < p)%Z).
+    { destruct (Z.eq_dec t0 p) as [Heq|Hneq].
+      - exfalso. rewrite Hw1Z in IHbit. rewrite <- Heq in IHbit.
+        rewrite Z.clearbit_eq in IHbit. discriminate.
+      - assert (Hp_ne_t0 : p <> t0) by (intro; apply Hneq; lia).
+        assert (Hw1_below_t0 : forall k, (0 <= k < t0)%Z -> Z.testbit (to_Z word1) k = false).
+        { intros k Hk. rewrite Hw1Z. rewrite Z.clearbit_spec'.
+          rewrite Z.ldiff_spec. rewrite Ht0below by lia. reflexivity. }
+        destruct (Z_lt_dec p t0); [|lia].
+        exfalso. assert (Z.testbit (to_Z word1) p = false) by (apply Hw1_below_t0; lia).
+        congruence. }
+    rewrite <- IHcount. rewrite Hw1Z.
+    assert (Hclear : Z_count_ones (Z.to_nat p) (Z.clearbit (to_Z word) t0) =
+                     Nat.pred (Z_count_ones (Z.to_nat p) (to_Z word))).
+    { apply Z_count_ones_clearbit; [assumption | lia | assumption | assumption]. }
+    rewrite Hclear.
+    enough (Hpos_count : (0 < Z_count_ones (Z.to_nat p) (to_Z word))%nat) by lia.
+    clear -Ht0bit Ht0_nn Ht0_lt_p.
+    enough (H : forall m, (Z.to_nat t0 < m)%nat -> (m <= Z.to_nat p)%nat ->
+      (0 < Z_count_ones m (to_Z word))%nat).
+    { apply H; lia. }
+    induction m as [|m' IHm].
+    { lia. }
+    intros Hlt Hle. simpl.
+    destruct (Nat.eq_dec (Z.to_nat t0) m') as [Heq|Hneq].
+    { replace (Z.of_nat m') with t0 by lia. rewrite Ht0bit. lia. }
+    { assert ((Z.to_nat t0 < m')%nat) by lia.
+      specialize (IHm ltac:(lia) ltac:(lia)).
+      destruct (Z.testbit (to_Z word) (Z.of_nat m')); unfold id; lia. }
+Qed.
+
+(* ================================================================= *)
+(* Part 5c: bv_select bridging lemmas                                  *)
+(* ================================================================= *)
+
+(** [bv_get] is [Z.testbit] on the appropriate word. *)
+Lemma bv_get_testbit : forall bv pos,
+  bv_get bv pos = Z.testbit (to_Z bv.[pos / wbits]) (to_Z (pos mod wbits)).
+Proof.
+  intros. unfold bv_get.
+  set (w := bv.[pos / wbits]). set (b := (pos mod wbits)%uint63).
+  pose proof (mod_wbits_bound pos) as Hblt.
+  assert (Hb_nn : (0 <= to_Z b)%Z) by (pose proof (to_Z_bounded b); lia).
+  assert (Heq : to_Z (w land (1 << b)) = Z.land (to_Z w) (2 ^ to_Z b)).
+  { rewrite land_spec'. rewrite lsl1_to_Z by exact Hblt. reflexivity. }
+  destruct (Z.testbit (to_Z w) (to_Z b)) eqn:Ebit.
+  - apply negb_true_iff. apply not_true_is_false. intro H.
+    apply eqb_spec in H.
+    assert (Hz : to_Z (w land (1 << b)) = 0%Z) by (rewrite H; reflexivity).
+    rewrite Heq in Hz.
+    assert (Hf : Z.testbit (Z.land (to_Z w) (2 ^ to_Z b)) (to_Z b) = false).
+    { rewrite Hz. apply Z.bits_0. }
+    rewrite Z.land_spec in Hf. rewrite Z.pow2_bits_true in Hf by lia.
+    rewrite andb_true_r in Hf. congruence.
+  - apply negb_false_iff. apply eqb_spec. apply to_Z_inj.
+    rewrite Heq.
+    apply Z.bits_inj'. intros n Hn.
+    rewrite Z.bits_0. rewrite Z.land_spec.
+    destruct (Z.eq_dec n (to_Z b)) as [->|Hne].
+    + rewrite Ebit. reflexivity.
+    + rewrite Z.pow2_bits_false by lia. rewrite andb_false_r. reflexivity.
+Qed.
+
+(** Slice extraction: [list_chunk start len l] = [firstn len (skipn start l)]. *)
+Definition list_chunk (start len : nat) (l : list bool) : list bool :=
+  firstn len (skipn start l).
+
+(** [Z_count_ones] agrees with [count_occ] on a chunk, given bit-by-bit agreement. *)
+Lemma Z_count_ones_count_occ : forall (j : nat) (w : Z) (chunk : list bool),
+  List.length chunk = j ->
+  (forall k, (k < j)%nat -> Z.testbit w (Z.of_nat k) = nth k chunk false) ->
+  Z_count_ones j w = count_occ Bool.bool_dec chunk true.
+Proof.
+  induction j as [|j' IH]; intros w chunk Hlen Hagree.
+  - destruct chunk; [reflexivity | simpl in Hlen; discriminate].
+  - simpl Z_count_ones.
+    assert (Hne : chunk <> []) by (intro; subst; simpl in Hlen; discriminate).
+    set (rl := removelast chunk). set (lst := last chunk false).
+    assert (Hchunk : chunk = rl ++ [lst]) by (apply app_removelast_last; exact Hne).
+    assert (Hrl : List.length rl = j').
+    { unfold rl. rewrite removelast_firstn_len. rewrite length_firstn. lia. }
+    assert (Hagree_rl : forall k, (k < j')%nat ->
+      Z.testbit w (Z.of_nat k) = nth k rl false).
+    { intros k Hk. rewrite (Hagree k ltac:(lia)).
+      rewrite Hchunk. rewrite app_nth1 by lia. reflexivity. }
+    assert (Hlast : Z.testbit w (Z.of_nat j') = lst).
+    { rewrite (Hagree j' ltac:(lia)). rewrite Hchunk.
+      rewrite app_nth2 by lia.
+      replace (j' - List.length rl)%nat with 0%nat by lia.
+      reflexivity. }
+    rewrite Hchunk. rewrite count_occ_app. simpl count_occ.
+    rewrite <- (IH w rl Hrl Hagree_rl).
+    rewrite Hlast.
+    destruct lst; simpl.
+    + destruct (bool_dec true true); [|contradiction]. unfold id. lia.
+    + destruct (bool_dec false true); [discriminate|]. unfold id. lia.
+Qed.
+
+(** [select_go] on [prefix ++ rest]: if target >= prefix count, skip the prefix. *)
+Lemma select_go_app :
+  forall prefix rest target offset count,
+  (count + count_occ Bool.bool_dec prefix true <= target)%nat ->
+  select_go (prefix ++ rest) target offset count =
+  select_go rest target (offset + List.length prefix) (count + count_occ Bool.bool_dec prefix true).
+Proof.
+  induction prefix as [|b prefix' IH]; intros rest target offset count Hge.
+  - simpl. f_equal; lia.
+  - simpl. destruct b.
+    + simpl in Hge.
+      destruct (Nat.eqb count target) eqn:Heq.
+      * apply Nat.eqb_eq in Heq. lia.
+      * rewrite IH.
+        -- destruct (bool_dec true true); [f_equal; lia | contradiction].
+        -- lia.
+    + rewrite IH.
+      * destruct (bool_dec false true); [discriminate | f_equal; lia].
+      * simpl in Hge. lia.
+Qed.
+
+(** Shifting both target and count by the same amount is identity. *)
+Lemma select_go_count_shift :
+  forall bv target pos count d,
+  (d <= count)%nat -> (count <= target)%nat ->
+  select_go bv target pos count = select_go bv (target - d) pos (count - d).
+Proof.
+  induction bv as [|b bv' IH]; intros target pos count d Hd Hct.
+  - reflexivity.
+  - simpl. destruct b.
+    + destruct (Nat.eqb count target) eqn:Heq1;
+        destruct (Nat.eqb (count - d) (target - d)) eqn:Heq2.
+      * reflexivity.
+      * apply Nat.eqb_eq in Heq1. apply Nat.eqb_neq in Heq2. lia.
+      * apply Nat.eqb_neq in Heq1. apply Nat.eqb_eq in Heq2. lia.
+      * apply Nat.eqb_neq in Heq1.
+        replace (S (count - d))%nat with (S count - d)%nat by lia.
+        apply IH; lia.
+    + apply IH; lia.
+Qed.
+
+(** [position_of_ith_one] on [prefix ++ rest] when target is in the rest. *)
+Lemma position_of_ith_one_app :
+  forall prefix rest target,
+  (count_occ Bool.bool_dec prefix true <= target)%nat ->
+  position_of_ith_one (prefix ++ rest) target =
+  (position_of_ith_one rest (target - count_occ Bool.bool_dec prefix true)
+    + List.length prefix)%nat.
+Proof.
+  intros prefix rest target Hge. unfold position_of_ith_one.
+  rewrite select_go_app. 2: lia.
+  replace (0 + count_occ Bool.bool_dec prefix true)%nat
+    with (count_occ Bool.bool_dec prefix true) by lia.
+  replace (0 + List.length prefix)%nat
+    with (List.length prefix) by lia.
+  replace (List.length prefix)
+    with (0 + List.length prefix)%nat at 1 by lia.
+  rewrite select_go_shift. f_equal.
+  rewrite (select_go_count_shift _ _ _ _ (count_occ Bool.bool_dec prefix true));
+    [| lia | lia].
+  replace (count_occ Bool.bool_dec prefix true -
+           count_occ Bool.bool_dec prefix true)%nat with 0%nat by lia.
+  reflexivity.
+Qed.
+
+(** Reading bit [k] from word [w_idx] via [bv_get]. *)
+Lemma bv_get_word_bit : forall (bv : array int) (w_idx : int) (k : nat),
+  (k < 63)%nat ->
+  (to_Z w_idx * 63 + Z.of_nat k < wB)%Z ->
+  (0 <= to_Z w_idx)%Z ->
+  bv_get bv (of_nat (Z.to_nat (to_Z w_idx) * 63 + k)) =
+    Z.testbit (to_Z bv.[w_idx]) (Z.of_nat k).
+Proof.
+  intros bv w_idx k Hk63 Hno_ov Hw_nn.
+  rewrite bv_get_testbit.
+  set (pos := of_nat (Z.to_nat (to_Z w_idx) * 63 + k)).
+  assert (Hpos_Z : Z.of_nat (Z.to_nat (to_Z w_idx) * 63 + k) =
+                    (to_Z w_idx * 63 + Z.of_nat k)%Z).
+  { rewrite Nat2Z.inj_add, Nat2Z.inj_mul, Z2Nat.id; lia. }
+  assert (Hpos_val : to_Z pos = (to_Z w_idx * 63 + Z.of_nat k)%Z).
+  { unfold pos. rewrite of_Z_spec.
+    rewrite Z.mod_small; [exact Hpos_Z | rewrite Hpos_Z; split; [lia | change Uint63.wB with wB; lia]]. }
+  assert (Hdiv : (pos / wbits)%uint63 = w_idx).
+  { apply to_Z_inj. rewrite div_spec. rewrite Hpos_val.
+    change (to_Z wbits) with 63%Z.
+    rewrite Z.div_add_l by lia.
+    rewrite Z.div_small by lia. lia. }
+  assert (Hmod : to_Z ((pos mod wbits)%uint63) = Z.of_nat k).
+  { rewrite mod_spec. rewrite Hpos_val.
+    change (to_Z wbits) with 63%Z.
+    rewrite Z.add_comm. rewrite Z.mod_add by lia.
+    rewrite Z.mod_small; lia. }
+  rewrite Hdiv. rewrite Hmod. reflexivity.
+Qed.
+
+(** Generalized loop invariant for [bv_select_aux]. *)
+Lemma bv_select_aux_agrees :
+  forall fuel (bv : array int) (bv_list : list bool) (remaining w_idx : int),
   (forall i, (i < List.length bv_list)%nat ->
-    bv_get bv (of_Z (Z.of_nat i)) = List.nth i bv_list false) ->
-  (Z.to_nat (to_Z target) < count_occ Bool.bool_dec bv_list true)%nat ->
-  to_Z (bv_select bv target) =
-    Z.of_nat (position_of_ith_one bv_list (Z.to_nat (to_Z target))).
+    bv_get bv (of_nat i) = List.nth i bv_list false) ->
+  (forall i, (List.length bv_list <= i < to_nat (length bv) * 63)%nat ->
+    bv_get bv (of_nat i) = false) ->
+  (to_nat remaining < count_occ Bool.bool_dec
+    (skipn (to_nat w_idx * 63) bv_list) true)%nat ->
+  (to_nat (length bv) <= to_nat w_idx + fuel)%nat ->
+  (List.length bv_list <= to_nat (length bv) * 63)%nat ->
+  (to_Z (length bv) * 63 < wB)%Z ->
+  to_nat (bv_select_aux bv remaining w_idx fuel) =
+    (position_of_ith_one (skipn (to_nat w_idx * 63) bv_list) (to_nat remaining)
+    + to_nat w_idx * 63)%nat.
+Proof.
+  induction fuel as [|fuel' IH];
+    intros bv bv_list remaining w_idx Hagree Hzero Hrem Hfuel Hcov Hov.
+  (* Base case: fuel = 0 — contradiction *)
+  { simpl. exfalso.
+    rewrite skipn_all2 in Hrem by lia. simpl in Hrem. lia. }
+  (* Inductive case: fuel = S fuel' *)
+  simpl bv_select_aux.
+  set (word := bv.[w_idx]).
+  set (pc := popcount word).
+  set (chunk := list_chunk (to_nat w_idx * 63) 63 bv_list).
+  set (suffix := skipn (to_nat w_idx * 63) bv_list).
+  (* w_idx is in bounds *)
+  assert (Hw_bound : (to_nat w_idx < to_nat (length bv))%nat).
+  { destruct (Nat.lt_ge_cases (to_nat w_idx) (to_nat (length bv))); [assumption|].
+    exfalso. rewrite skipn_all2 in Hrem by lia. simpl in Hrem. lia. }
+  assert (Hlt_Z : (to_Z w_idx < to_Z (length bv))%Z).
+  { pose proof (to_Z_bounded w_idx). pose proof (to_Z_bounded (length bv)). lia. }
+  assert (Hwx63 : (to_Z w_idx * 63 < wB)%Z).
+  { assert (to_Z w_idx * 63 < to_Z (length bv) * 63)%Z by nia. lia. }
+  assert (Hw_nn : (0 <= to_Z w_idx)%Z) by (pose proof (to_Z_bounded w_idx); lia).
+  assert (Hmul_no_ov : to_Z (w_idx * wbits) = to_Z w_idx * 63).
+  { rewrite mul_spec. change (to_Z wbits) with 63%Z.
+    rewrite Z.mod_small; [reflexivity|].
+    pose proof (to_Z_bounded w_idx). split; [apply Z.mul_nonneg_nonneg; lia | exact Hwx63]. }
+  (* suffix = chunk ++ rest *)
+  assert (Hsuff_split : suffix = chunk ++ skipn 63 suffix).
+  { unfold chunk, list_chunk, suffix. rewrite firstn_skipn. reflexivity. }
+  (* chunk length *)
+  assert (Hchunk_len : (List.length chunk <= 63)%nat).
+  { unfold chunk, list_chunk. rewrite length_firstn. lia. }
+  (* bit agreement: word[k] = chunk[k] *)
+  assert (Hchunk_agree : forall k, (k < List.length chunk)%nat ->
+    Z.testbit (to_Z word) (Z.of_nat k) = nth k chunk false).
+  { intros k Hk.
+    assert (Hk63 : (k < 63)%nat) by lia.
+    assert (Habs : (to_nat w_idx * 63 + k < List.length bv_list)%nat).
+    { unfold chunk, list_chunk in Hk. rewrite length_firstn in Hk.
+      rewrite length_skipn in Hk. lia. }
+    pose proof (Hagree (to_nat w_idx * 63 + k)%nat Habs) as Hag.
+    unfold chunk, list_chunk. rewrite nth_firstn by lia. rewrite nth_skipn.
+    rewrite <- Hag.
+    destruct (Nat.ltb_spec k 63); [|lia].
+    unfold word. symmetry. apply bv_get_word_bit; [lia | | lia].
+    assert ((to_Z w_idx + 1) * 63 <= to_Z (length bv) * 63)%Z by nia. lia. }
+  (* Extra bits beyond chunk are zero *)
+  assert (Hextra_zero : forall k, (List.length chunk <= k < 63)%nat ->
+    Z.testbit (to_Z word) (Z.of_nat k) = false).
+  { intros k [Hklo Hkhi].
+    assert (Hpos : (to_nat w_idx * 63 + k < to_nat (length bv) * 63)%nat).
+    { assert ((to_Z w_idx + 1) * 63 <= to_Z (length bv) * 63)%Z by nia. lia. }
+    assert (Hge_len : (List.length bv_list <= to_nat w_idx * 63 + k)%nat).
+    { unfold chunk, list_chunk in Hklo. rewrite length_firstn in Hklo.
+      rewrite length_skipn in Hklo. lia. }
+    pose proof (Hzero (to_nat w_idx * 63 + k)%nat ltac:(lia)) as Hz.
+    unfold word. rewrite <- bv_get_word_bit; [exact Hz | lia | | lia].
+    assert ((to_Z w_idx + 1) * 63 <= to_Z (length bv) * 63)%Z by nia. lia. }
+  (* popcount = count_occ of chunk *)
+  assert (Hpc_eq : Z_count_ones 63 (to_Z word) =
+    count_occ Bool.bool_dec chunk true).
+  { (* Z_count_ones 63 = Z_count_ones (length chunk) because extra bits are 0 *)
+    assert (Hpart : Z_count_ones (List.length chunk) (to_Z word) =
+      count_occ Bool.bool_dec chunk true).
+    { apply Z_count_ones_count_occ; [reflexivity | exact Hchunk_agree]. }
+    rewrite <- Hpart.
+    (* Show Z_count_ones 63 = Z_count_ones (length chunk) *)
+    assert (Hext : forall j, (List.length chunk <= j <= 63)%nat ->
+      Z_count_ones j (to_Z word) = Z_count_ones (List.length chunk) (to_Z word)).
+    { intros j. induction j as [|j' IHj].
+      - intros. assert (List.length chunk = 0)%nat by lia. rewrite H0. reflexivity.
+      - intros [Hlo Hhi].
+        destruct (Nat.eq_dec (List.length chunk) (S j')) as [->|Hne].
+        + reflexivity.
+        + simpl. rewrite Hextra_zero by lia. unfold id. apply IHj. lia. }
+    apply Hext. lia. }
+  assert (Hpc_nat : to_nat pc = count_occ Bool.bool_dec chunk true).
+  { rewrite <- Hpc_eq.
+    assert (Hpop : Z.of_nat (Z_count_ones 63 (to_Z word)) = to_Z pc).
+    { unfold pc. exact (popcount_count_ones word). }
+    apply Nat2Z.inj. rewrite Z2Nat.id by (pose proof (to_Z_bounded pc); lia).
+    lia. }
+  (* Case split: remaining <? pc *)
+  destruct (remaining <? pc)%uint63 eqn:Hltb.
+  + (* FOUND: remaining < pc — answer is in this word *)
+    apply ltb_spec in Hltb.
+    (* remaining < pc implies remaining < count_ones = count_occ chunk *)
+    assert (Hlt_nat : (to_nat remaining < to_nat pc)%nat).
+    { apply Nat2Z.inj_lt.
+      repeat rewrite Z2Nat.id by (pose proof (to_Z_bounded remaining);
+        pose proof (to_Z_bounded pc); lia). lia. }
+    assert (Hrem_co : (to_nat remaining < count_occ Bool.bool_dec chunk true)%nat).
+    { rewrite <- Hpc_nat. exact Hlt_nat. }
+    assert (Hrem_z : (to_nat remaining < Z_count_ones 63 (to_Z word))%nat).
+    { rewrite Hpc_eq. exact Hrem_co. }
+    (* word must be positive — it has ones *)
+    assert (Hword_pos : (0 < to_Z word)%Z).
+    { destruct (Z.eq_dec (to_Z word) 0) as [Hz|Hnz].
+      - exfalso. rewrite Hz in Hrem_z.
+        change (to_nat remaining < Z_count_ones 63 0)%nat in Hrem_z.
+        vm_compute in Hrem_z. lia.
+      - pose proof (to_Z_bounded word). lia. }
+    (* select_word_correct gives position and count *)
+    pose proof (select_word_correct (to_nat remaining) word Hword_pos Hrem_z)
+      as [Hbit_set Hcount_below].
+    set (bit_pos := tail0 (clear_n_ones word (to_nat remaining))) in *.
+    (* bit_pos < 63 *)
+    assert (Hbp_bound : (to_Z bit_pos < 63)%Z).
+    { pose proof (to_Z_bounded bit_pos).
+      pose proof (to_Z_bounded word).
+      destruct (Z.lt_ge_cases (to_Z bit_pos) 63) as [|Hge]; [lia|].
+      exfalso.
+      assert (Hfalse : Z.testbit (to_Z word) (to_Z bit_pos) = false).
+      { apply Z.bits_above_log2; [lia|].
+        enough (Z.log2 (to_Z word) < 63)%Z by lia.
+        apply Z.log2_lt_pow2; [exact Hword_pos|].
+        change 63%Z with (Z.of_nat 63).
+        change (2 ^ Z.of_nat 63)%Z with Uint63Axioms.wB. lia. }
+      rewrite Hbit_set in Hfalse. discriminate. }
+    assert (Hbp_nat : (Z.to_nat (to_Z bit_pos) < 63)%nat) by lia.
+    (* Convert to_Z bit_pos to Z.of_nat form for compatibility with chunk lemmas *)
+    assert (Hbp_conv : to_Z bit_pos = Z.of_nat (Z.to_nat (to_Z bit_pos))).
+    { rewrite Z2Nat.id; [reflexivity|]. pose proof (to_Z_bounded bit_pos). lia. }
+    rewrite Hbp_conv in Hbit_set, Hcount_below.
+    (* bit_pos < length chunk *)
+    assert (Hbp_chunk : (Z.to_nat (to_Z bit_pos) < List.length chunk)%nat).
+    { destruct (Nat.lt_ge_cases (Z.to_nat (to_Z bit_pos)) (List.length chunk)); [assumption|].
+      exfalso.
+      assert (Heb : Z.testbit (to_Z word) (Z.of_nat (Z.to_nat (to_Z bit_pos))) = false).
+      { apply Hextra_zero. lia. }
+      rewrite Heb in Hbit_set. discriminate. }
+    (* nth bit_pos chunk = true *)
+    assert (Hnth_chunk : nth (Z.to_nat (to_Z bit_pos)) chunk false = true).
+    { rewrite <- Hchunk_agree by exact Hbp_chunk. exact Hbit_set. }
+    (* count_occ of firstn bit_pos chunk = to_nat remaining *)
+    assert (Hco_prefix : count_occ Bool.bool_dec
+      (firstn (Z.to_nat (to_Z bit_pos)) chunk) true = to_nat remaining).
+    { (* Use Z_count_ones_count_occ on the prefix *)
+      rewrite <- Hcount_below.
+      rewrite Nat2Z.id.
+      symmetry. apply Z_count_ones_count_occ.
+      - rewrite length_firstn. apply Nat.min_l. lia.
+      - intros k Hk.
+        assert (Hk' : (k < Z.to_nat (to_Z bit_pos))%nat).
+        { assert (List.length (firstn (Z.to_nat (to_Z bit_pos)) chunk) =
+            Z.to_nat (to_Z bit_pos)).
+          { apply firstn_length_le. lia. }
+          lia. }
+        rewrite nth_firstn.
+        destruct (Nat.ltb_spec k (Z.to_nat (to_Z bit_pos))); [|lia].
+        rewrite <- Hchunk_agree; [reflexivity|lia]. }
+    (* suffix = chunk ++ rest, and bit_pos < length chunk, so nth in suffix = nth in chunk *)
+    assert (Hnth_suffix : nth (Z.to_nat (to_Z bit_pos)) suffix false = true).
+    { rewrite Hsuff_split. rewrite app_nth1 by exact Hbp_chunk. exact Hnth_chunk. }
+    (* firstn bit_pos suffix = firstn bit_pos chunk when bit_pos < length chunk *)
+    assert (Hfirstn_eq : firstn (Z.to_nat (to_Z bit_pos)) suffix =
+      firstn (Z.to_nat (to_Z bit_pos)) chunk).
+    { rewrite Hsuff_split. rewrite firstn_app.
+      replace (Z.to_nat (to_Z bit_pos) - List.length chunk)%nat with 0%nat by lia.
+      simpl. rewrite app_nil_r. reflexivity. }
+    (* count_occ of firstn in suffix *)
+    assert (Hco_suffix : count_occ Bool.bool_dec
+      (firstn (Z.to_nat (to_Z bit_pos)) suffix) true = to_nat remaining).
+    { rewrite Hfirstn_eq. exact Hco_prefix. }
+    (* bit_pos < length suffix *)
+    assert (Hbp_suffix : (Z.to_nat (to_Z bit_pos) < List.length suffix)%nat).
+    { (* chunk = firstn 63 suffix, so length chunk <= length suffix *)
+      assert (List.length chunk <= List.length suffix)%nat.
+      { enough (List.length chunk <= List.length suffix)%nat by lia.
+        assert (Htmp := Hsuff_split).
+        apply (f_equal (@List.length bool)) in Htmp.
+        rewrite length_app in Htmp. lia. }
+      lia. }
+    (* Apply select_go_at_gen *)
+    assert (Hsel : select_go suffix (to_nat remaining) 0 0 =
+      Z.to_nat (to_Z bit_pos)).
+    { rewrite (select_go_at_gen suffix (Z.to_nat (to_Z bit_pos)) 0 (to_nat remaining) 0);
+        [lia | exact Hbp_suffix | exact Hnth_suffix | | lia].
+      simpl. rewrite Hco_suffix. lia. }
+    (* Now relate the Int63 expression to nat *)
+    unfold position_of_ith_one. rewrite Hsel.
+    (* Goal: to_nat (w_idx * wbits + bit_pos) = Z.to_nat (to_Z bit_pos) + to_nat w_idx * 63 *)
+    apply Nat2Z.inj.
+    rewrite Nat2Z.inj_add.
+    repeat rewrite Z2Nat.id by (pose proof (to_Z_bounded bit_pos);
+      pose proof (to_Z_bounded w_idx); lia).
+    (* to_Z (w_idx * wbits + bit_pos) = to_Z w_idx * 63 + to_Z bit_pos *)
+    rewrite add_spec. rewrite Hmul_no_ov.
+    assert (HwB_eq : Uint63.wB = wB) by reflexivity.
+    rewrite HwB_eq.
+    rewrite Z.mod_small.
+    2: { pose proof (to_Z_bounded bit_pos). split; [nia|].
+         assert ((to_Z w_idx + 1) * 63 <= to_Z (length bv) * 63)%Z by nia.
+         unfold wB in *. change (2^63)%Z with 9223372036854775808%Z in *. lia. }
+    lia.
+  + (* SKIP: remaining >= pc — recurse to next word *)
+    assert (Hge_rem : (to_Z pc <= to_Z remaining)%Z).
+    { destruct (Z_lt_ge_dec (to_Z remaining) (to_Z pc)) as [Hlt|]; [|lia].
+      exfalso. apply ltb_spec in Hlt. rewrite Hlt in Hltb. discriminate. }
+    assert (Hge_nat : (to_nat pc <= to_nat remaining)%nat).
+    { unfold to_nat. apply Z2Nat.inj_le.
+      - pose proof (to_Z_bounded pc). lia.
+      - pose proof (to_Z_bounded remaining). lia.
+      - lia. }
+    (* Int63 arithmetic for sub and add *)
+    assert (Hsub_val : to_Z (remaining - pc) = (to_Z remaining - to_Z pc)%Z).
+    { rewrite sub_spec. rewrite Z.mod_small; [reflexivity|].
+      pose proof (to_Z_bounded remaining). pose proof (to_Z_bounded pc). lia. }
+    assert (Hadd_val : to_Z (w_idx + 1) = (to_Z w_idx + 1)%Z).
+    { rewrite add_spec.
+      rewrite Z.mod_small; [reflexivity|].
+      pose proof (to_Z_bounded w_idx).
+      pose proof (to_Z_bounded (length bv)).
+      rewrite to_Z_1.
+      assert (HwB_val : Uint63Axioms.wB = (2^63)%Z) by reflexivity.
+      rewrite HwB_val. lia. }
+    assert (Hsub_nat : to_nat (remaining - pc) = (to_nat remaining - to_nat pc)%nat).
+    { apply Nat2Z.inj. rewrite Nat2Z.inj_sub by lia.
+      repeat rewrite Z2Nat.id by (pose proof (to_Z_bounded remaining);
+        pose proof (to_Z_bounded pc); lia).
+      exact Hsub_val. }
+    assert (Hadd_nat : to_nat (w_idx + 1) = (to_nat w_idx + 1)%nat).
+    { apply Nat2Z.inj. rewrite Nat2Z.inj_add.
+      repeat rewrite Z2Nat.id by (pose proof (to_Z_bounded w_idx); lia).
+      exact Hadd_val. }
+    (* suffix decomposition *)
+    assert (Hskip63 : skipn 63 suffix = skipn ((to_nat w_idx + 1) * 63) bv_list).
+    { unfold suffix. rewrite skipn_skipn. f_equal. lia. }
+    (* count in chunk *)
+    assert (Hchunk_count : (count_occ Bool.bool_dec chunk true <=
+      to_nat remaining)%nat).
+    { rewrite <- Hpc_nat. exact Hge_nat. }
+    (* remaining ones after skipping chunk *)
+    assert (Hrem_rest :
+      (to_nat (remaining - pc) <
+       count_occ Bool.bool_dec (skipn ((to_nat w_idx + 1) * 63) bv_list) true)%nat).
+    { rewrite Hsub_nat.
+      fold suffix in Hrem. rewrite Hsuff_split in Hrem.
+      rewrite count_occ_app in Hrem.
+      rewrite <- Hskip63. lia. }
+    (* Apply IH *)
+    assert (IH_applied :
+      to_nat (bv_select_aux bv (remaining - pc) (w_idx + 1) fuel') =
+      (position_of_ith_one (skipn (to_nat (w_idx + 1) * 63) bv_list) (to_nat (remaining - pc))
+       + to_nat (w_idx + 1) * 63)%nat).
+    { apply IH; try assumption.
+      - rewrite Hadd_nat. exact Hrem_rest.
+      - rewrite Hadd_nat. lia. }
+    rewrite IH_applied. rewrite Hadd_nat.
+    (* Relate position_of_ith_one on suffix to next suffix *)
+    fold suffix. rewrite Hsuff_split.
+    rewrite position_of_ith_one_app by (rewrite <- Hpc_nat; exact Hge_nat).
+    rewrite Hsub_nat, <- Hpc_nat.
+    rewrite Hskip63.
+    (* chunk must be full (63 bits) in the SKIP case *)
+    assert (Hchunk_full : List.length chunk = 63%nat).
+    { (* If chunk < 63, suffix < 63, so rest is empty, contradicting Hrem_rest *)
+      unfold chunk, list_chunk.
+      rewrite length_firstn.
+      assert (Hsl : List.length suffix = (List.length bv_list - to_nat w_idx * 63)%nat)
+        by (unfold suffix; apply length_skipn).
+      destruct (Nat.lt_ge_cases (List.length suffix) 63) as [Hshort|Hlong].
+      - exfalso.
+        assert (skipn 63 suffix = @nil bool) by (apply skipn_all2; lia).
+        rewrite H in Hskip63.
+        rewrite <- Hskip63 in Hrem_rest. simpl in Hrem_rest. lia.
+      - apply Nat.min_l. exact Hlong. }
+    lia.
+Qed.
+
+(** A6: [bv_select] agrees with [position_of_ith_one]. *)
+Lemma bv_select_agrees : forall bv bv_list target,
+  (forall i, (i < List.length bv_list)%nat ->
+    bv_get bv (of_nat i) = List.nth i bv_list false) ->
+  (forall i, (List.length bv_list <= i < to_nat (length bv) * 63)%nat ->
+    bv_get bv (of_nat i) = false) ->
+  (to_nat target < count_occ Bool.bool_dec bv_list true)%nat ->
+  (List.length bv_list <= to_nat (length bv) * 63)%nat ->
+  (to_Z (length bv) * 63 < wB)%Z ->
+  to_nat (bv_select bv target) =
+    position_of_ith_one bv_list (to_nat target).
+Proof.
+  intros bv bv_list target Hagree Hzero Hcount Hcov Hov.
+  unfold bv_select.
+  rewrite (bv_select_aux_agrees (to_nat (length bv)) bv bv_list target 0);
+    try assumption.
+  - simpl. lia.
+  - simpl. lia.
+Qed.
 
 (** A7: [lor (u << l) lo] recombines upper and lower bits. *)
 Lemma recombine63 : forall u l lo,
@@ -972,6 +1878,219 @@ Proof.
       apply Z.div_lt_upper_bound; lia.
 Qed.
 
+(* ================================================================= *)
+(* Helper lemmas for access63_agrees                                  *)
+(* ================================================================= *)
+
+Lemma sorted_map_upper_value :
+  forall l (xs : list Z), 0 <= l -> sorted xs -> sorted (map (upper_value l) xs).
+Proof.
+  intros l xs Hl. induction xs as [|a rest IH].
+  - constructor.
+  - intros Hsrt. inversion Hsrt as [|? ? Hsrt_rest HF_le]; subst.
+    constructor; [exact (IH Hsrt_rest)|].
+    rewrite Forall_forall. intros u Hu.
+    apply in_map_iff in Hu. destruct Hu as [b [<- Hb]].
+    unfold upper_value. rewrite !Z.shiftr_div_pow2 by lia.
+    apply Z.div_le_mono; [apply Z.pow_pos_nonneg; lia|].
+    rewrite Forall_forall in HF_le. exact (HF_le _ Hb).
+Qed.
+
+Lemma Forall_nonneg_map_upper_value :
+  forall l (xs : list Z), 0 <= l -> Forall (fun z => 0 <= z) xs ->
+  Forall (fun u => 0 <= u) (map (upper_value l) xs).
+Proof.
+  intros l xs Hl Hnn. rewrite Forall_forall. intros u Hu.
+  apply in_map_iff in Hu. destruct Hu as [z [<- Hz]].
+  apply upper_value_nonneg; [lia|].
+  rewrite Forall_forall in Hnn. exact (Hnn _ Hz).
+Qed.
+
+Lemma last_map_upper_value :
+  forall l (xs : list int),
+  xs <> [] -> 0 <= l ->
+  last (map (fun x => upper_value l (to_Z x)) xs) 0 =
+    to_Z (last xs 0%uint63) / 2 ^ l.
+Proof.
+  intros l xs Hne Hl.
+  assert (Hml : forall (A B : Type) (f : A -> B) (l0 : list A) (da : A) (db : B),
+    l0 <> [] -> last (map f l0) db = f (last l0 da)).
+  { intros A B f l0 da db Hne'.
+    rewrite (app_removelast_last da Hne').
+    rewrite map_app. simpl map. rewrite !last_last. reflexivity. }
+  rewrite (Hml int Z _ _ 0%uint63 0%Z Hne).
+  unfold upper_value. rewrite Z.shiftr_div_pow2 by lia. reflexivity.
+Qed.
+
+Lemma fill_upper_length : forall xs l bv pos prev,
+  PArray.length (fill_upper xs l bv pos prev) = PArray.length bv.
+Proof.
+  induction xs as [|x rest IH]; intros; [reflexivity|].
+  simpl. rewrite IH. unfold bv_set. apply length_set'.
+Qed.
+
+Lemma build_upper_length_eq :
+  forall l (xs : list int),
+  xs <> [] -> 0 <= l ->
+  sorted (to_Z_list xs) -> all_nonneg (to_Z_list xs) ->
+  Z.of_nat (List.length (build_upper (map (upper_value l) (to_Z_list xs)))) =
+    (to_Z (last xs 0%uint63) / 2 ^ l + Z.of_nat (List.length xs))%Z.
+Proof.
+  intros l xs Hne Hl Hs Hnn.
+  set (ups := map (upper_value l) (to_Z_list xs)).
+  assert (Hups_ne : ups <> []) by (unfold ups, to_Z_list; destruct xs; [contradiction|discriminate]).
+  assert (Hups_nn : Forall (fun u => 0 <= u) ups).
+  { unfold ups. apply Forall_nonneg_map_upper_value; [lia|].
+    unfold all_nonneg in Hnn. exact Hnn. }
+  assert (Hups_sorted : sorted ups).
+  { unfold ups. apply sorted_map_upper_value; [lia|exact Hs]. }
+  assert (Hlen_eq := length_build_upper ups Hups_ne Hups_nn Hups_sorted).
+  assert (Hlast_ups : last ups 0%Z = to_Z (last xs 0%uint63) / 2 ^ l).
+  { unfold ups, to_Z_list. rewrite map_map.
+    apply last_map_upper_value; [exact Hne|lia]. }
+  assert (Hlen_ups : List.length ups = List.length xs).
+  { unfold ups, to_Z_list. rewrite !length_map. reflexivity. }
+  rewrite Hlen_eq, Hlast_ups, Hlen_ups. lia.
+Qed.
+
+Lemma build_upper_aux_length_bound :
+  forall (U : Z) (us : list Z) (prev : Z),
+  Forall (fun u => u >= prev) us ->
+  Forall (fun u => u < U) us ->
+  sorted us ->
+  0 <= prev ->
+  (Z.of_nat (Datatypes.length (build_upper_aux us prev)) <=
+    Z.of_nat (Datatypes.length us) + Z.max 0 (U - prev))%Z.
+Proof.
+  intros U us prev Hge Hbd Hss Hprev.
+  revert prev Hge Hprev. induction us as [|u rest IH]; intros prev Hge Hprev.
+  - simpl. lia.
+  - inversion Hge as [|? ? Hu_ge Hge_rest]; subst.
+    inversion Hbd as [|? ? Hu_bd Hbd_rest]; subst.
+    inversion Hss as [|? ? Hss_rest HF_le]; subst.
+    simpl build_upper_aux.
+    rewrite length_app, repeat_length.
+    assert (Hrest_ge : Forall (fun v => v >= u) rest).
+    { revert HF_le. apply Forall_impl. intros a Ha. lia. }
+    specialize (IH Hbd_rest Hss_rest u Hrest_ge ltac:(lia)).
+    change (Datatypes.length (true :: build_upper_aux rest u))
+      with (S (Datatypes.length (build_upper_aux rest u))).
+    change (Datatypes.length (u :: rest)) with (S (Datatypes.length rest)).
+    rewrite !Nat2Z.inj_add, !Nat2Z.inj_succ.
+    rewrite (Z2Nat.id (u - prev)) by lia.
+    rewrite Z.max_r in IH by lia.
+    rewrite Z.max_r by lia. lia.
+Qed.
+
+Lemma build_upper_length_le :
+  forall l (U : Z) (xs : list int),
+  xs <> [] -> 0 <= l -> 0 < U ->
+  sorted (to_Z_list xs) -> all_nonneg (to_Z_list xs) ->
+  bounded_by U (to_Z_list xs) ->
+  (Z.of_nat (Datatypes.length
+    (build_upper (map (upper_value l) (to_Z_list xs)))) <=
+    Z.of_nat (List.length xs) + U)%Z.
+Proof.
+  intros l U xs Hne Hl HU Hs Hnn Hb.
+  set (uppers := map (upper_value l) (to_Z_list xs)).
+  assert (HSS : sorted uppers) by (apply sorted_map_upper_value; [lia|exact Hs]).
+  unfold build_upper.
+  apply Z.le_trans with
+    (Z.of_nat (Datatypes.length uppers) + Z.max 0 (U - 0))%Z.
+  { apply build_upper_aux_length_bound.
+    - apply Forall_forall. intros u Hu.
+      apply in_map_iff in Hu. destruct Hu as [z [<- Hz]].
+      assert (Hnn_z : 0 <= z).
+      { unfold all_nonneg in Hnn. rewrite Forall_forall in Hnn. exact (Hnn _ Hz). }
+      pose proof (upper_value_nonneg l z ltac:(lia) Hnn_z). lia.
+    - apply Forall_forall. intros u Hu.
+      apply in_map_iff in Hu. destruct Hu as [z [<- Hz]].
+      unfold upper_value. rewrite Z.shiftr_div_pow2 by lia.
+      unfold bounded_by in Hb. rewrite Forall_forall in Hb.
+      assert (Hz_bnd : z < U) by (apply Hb; exact Hz).
+      apply Z.le_lt_trans with z; [|exact Hz_bnd].
+      apply Z.div_le_upper_bound; [apply Z.pow_pos_nonneg; lia|].
+      assert (Hznn : 0 <= z).
+      { unfold all_nonneg in Hnn. rewrite Forall_forall in Hnn. exact (Hnn _ Hz). }
+      assert (1 <= 2 ^ l)%Z by (change 1%Z with (2^0)%Z; apply Z.pow_le_mono_r; lia).
+      nia.
+    - exact HSS.
+    - lia. }
+  unfold uppers, to_Z_list. rewrite !length_map. rewrite Z.max_r by lia. lia.
+Qed.
+
+(** Positions beyond the build_upper list read as zero in fill_upper. *)
+Lemma fill_upper_zero_tail : forall xs l bv,
+  0 <= to_Z l ->
+  sorted (to_Z_list xs) -> all_nonneg (to_Z_list xs) ->
+  xs <> [] ->
+  (Z.of_nat (List.length
+    (build_upper (map (upper_value (to_Z l)) (to_Z_list xs)))) < wB)%Z ->
+  PArray.length bv =
+    add (div (add (of_Z (Z.of_nat (List.length xs)))
+                  (List.last xs 0%uint63 >> l)) wbits) 1 ->
+  (to_Z (PArray.length bv) * 63 < wB)%Z ->
+  (forall p, 0 <= to_Z p ->
+    to_Z p < Z.of_nat (List.length
+      (build_upper (map (upper_value (to_Z l)) (to_Z_list xs)))) ->
+    (p / wbits <? PArray.length bv)%uint63 = true) ->
+  (forall q, bv_get bv q = false) ->
+  forall j,
+    (List.length (build_upper (map (upper_value (to_Z l)) (to_Z_list xs))) <= j <
+      to_nat (PArray.length (fill_upper xs l bv 0 0)) * 63)%nat ->
+    bv_get (fill_upper xs l bv 0 0) (of_nat j) = false.
+Proof.
+  intros xs l bv Hl Hs Hnn Hne Hovf Hlen_bv Hbv_ov Hbounds Hzero j [Hj_lo Hj_hi].
+  (* Bridge the two map forms *)
+  assert (Hmap_conv : map (fun x => upper_value (to_Z l) (to_Z x)) xs =
+    map (upper_value (to_Z l)) (to_Z_list xs)).
+  { unfold to_Z_list. rewrite map_map. reflexivity. }
+  assert (Hba_eq : build_upper_aux (map (fun x => upper_value (to_Z l) (to_Z x)) xs) 0 =
+    build_upper (map (upper_value (to_Z l)) (to_Z_list xs))).
+  { unfold build_upper. rewrite Hmap_conv. reflexivity. }
+  assert (Hj_Z : (Z.of_nat (List.length
+    (build_upper_aux (map (fun x => upper_value (to_Z l) (to_Z x)) xs) 0))
+    <= Z.of_nat j)%Z).
+  { rewrite Hba_eq. lia. }
+  rewrite (fill_upper_get_ge xs l bv 0%uint63 0%uint63 (of_nat j)).
+  - apply Hzero.
+  - (* overflow *)
+    change (to_Z 0) with 0%Z. rewrite Z.add_0_l.
+    rewrite Hba_eq. exact Hovf.
+  - (* Forall prev <= upper *)
+    apply Forall_forall. intros x Hx.
+    change (to_Z 0) with 0%Z.
+    unfold upper_value. rewrite Z.shiftr_div_pow2 by lia.
+    apply Z.div_pos; [|apply Z.pow_pos_nonneg; lia].
+    unfold all_nonneg in Hnn. rewrite Forall_forall in Hnn.
+    apply Hnn. unfold to_Z_list. apply in_map. exact Hx.
+  - (* sorted *)
+    rewrite Hmap_conv. apply sorted_map_upper_value; [lia|exact Hs].
+  - exact Hl.
+  - (* bounds *)
+    intros p' Hp'1 Hp'2.
+    change (to_Z 0%uint63) with 0%Z in Hp'1, Hp'2.
+    rewrite Z.add_0_l in Hp'2.
+    rewrite Hba_eq in Hp'2.
+    apply Hbounds; lia.
+  - (* q >= list length *)
+    change (to_Z 0) with 0%Z. rewrite Z.add_0_l.
+    rewrite Hba_eq.
+    rewrite of_Z_spec.
+    rewrite Z.mod_small.
+    + lia.
+    + split; [lia|].
+      rewrite fill_upper_length in Hj_hi.
+      enough (Z.of_nat j < wB)%Z by (change Uint63.wB with wB; unfold wB in *; lia).
+      assert (Hnat_Z : Z.of_nat (Z.to_nat (to_Z (PArray.length bv))) =
+                        to_Z (PArray.length bv)).
+      { rewrite Z2Nat.id; [reflexivity|].
+        pose proof (to_Z_bounded (PArray.length bv)). lia. }
+      apply Z.lt_le_trans with (Z.of_nat (Z.to_nat (to_Z (PArray.length bv))) * 63)%Z.
+      { apply Nat2Z.inj_lt in Hj_hi. rewrite Nat2Z.inj_mul in Hj_hi. exact Hj_hi. }
+      rewrite Hnat_Z. lia.
+Qed.
+
 (** Main access agreement. *)
 Theorem access63_agrees : forall U xs i,
   in_range (to_Z U) (to_Z_list xs) ->
@@ -1029,10 +2148,10 @@ Proof.
       (build_upper (map (upper_value lZ) (to_Z_list (x0 :: xs')))).
     f_equal. exact Hmap_eq. }
   (* ---- upper bitvector agreement ---- *)
-  set (bv0 := make (add (div (add n63 ((List.last (x0 :: xs') 0) >> l63)) wbits) 1) 0).
+  set (bv0 := make (add (div (add n63 ((List.last (x0 :: xs') 0%uint63) >> l63)) wbits) 1) 0%uint63).
   assert (Hupper_raw : forall j,
     (j < List.length (build_upper (map (fun x => upper_value (to_Z l63) (to_Z x)) (x0 :: xs'))))%nat ->
-    bv_get (fill_upper (x0 :: xs') l63 bv0 0 0) (of_Z (Z.of_nat j)) =
+    bv_get (fill_upper (x0 :: xs') l63 bv0 0%uint63 0%uint63) (of_Z (Z.of_nat j)) =
       List.nth j (build_upper (map (fun x => upper_value (to_Z l63) (to_Z x)) (x0 :: xs'))) false).
   { apply fill_upper_agrees.
     - exact Hl63_nn.
@@ -1042,27 +2161,27 @@ Proof.
       intros p Hp_nn Hp_lt.
       (* We need: (p / wbits <? PArray.length bv0) = true *)
       (* Strategy: show p / wbits < bv0 size at Z level *)
-      set (last_u := to_Z (List.last (x0 :: xs') 0 >> l63)).
-      set (bv_size := add (div (add n63 (List.last (x0 :: xs') 0 >> l63)) wbits) 1).
+      set (last_u := to_Z (List.last (x0 :: xs') 0%uint63 >> l63)).
+      set (bv_size := add (div (add n63 (List.last (x0 :: xs') 0%uint63 >> l63)) wbits) 1).
       (* Step 1: last >> l < U *)
       assert (Hlast_u_bound : last_u < to_Z U).
       { unfold last_u.
         rewrite lsr_spec.
         (* last element is bounded by U *)
-        assert (Hlast_in : In (List.last (x0 :: xs') 0) (x0 :: xs')).
-        { rewrite (app_removelast_last 0 Hne) at 2.
+        assert (Hlast_in : In (List.last (x0 :: xs') 0%uint63) (x0 :: xs')).
+        { rewrite (app_removelast_last 0%uint63 Hne) at 2.
           apply in_or_app. right. left. reflexivity. }
-        assert (Hlast_bnd : to_Z (List.last (x0 :: xs') 0) < to_Z U).
+        assert (Hlast_bnd : to_Z (List.last (x0 :: xs') 0%uint63) < to_Z U).
         { unfold bounded_by in Hb. rewrite Forall_forall in Hb.
           apply Hb. unfold to_Z_list. apply in_map. exact Hlast_in. }
-        assert (Hlast_nn : 0 <= to_Z (List.last (x0 :: xs') 0)).
+        assert (Hlast_nn : 0 <= to_Z (List.last (x0 :: xs') 0%uint63)).
         { unfold all_nonneg in Hnn. rewrite Forall_forall in Hnn.
           apply Hnn. unfold to_Z_list. apply in_map. exact Hlast_in. }
         assert (H2l : 0 < 2 ^ to_Z l63) by (apply Z.pow_pos_nonneg; lia).
         apply Z.div_lt_upper_bound; [lia|].
         apply Z.lt_le_trans with (to_Z U * 2 ^ to_Z l63)%Z.
         - nia.
-        - assert (to_Z (List.last (x0 :: xs') 0) < to_Z U) by exact Hlast_bnd.
+        - assert (to_Z (List.last (x0 :: xs') 0%uint63) < to_Z U) by exact Hlast_bnd.
           nia. }
       (* Step 2: n + last_u < n + U <= max_length * wbits (no int overflow) *)
       assert (Hn_last_u : Z.of_nat n_nat + last_u < to_Z max_length * to_Z wbits).
@@ -1079,16 +2198,16 @@ Proof.
         [|apply Z.pow_pos_nonneg; lia].
         unfold all_nonneg in Hnn. rewrite Forall_forall in Hnn.
         apply Hnn. unfold to_Z_list. apply in_map.
-        rewrite (app_removelast_last 0 Hne) at 2.
+        rewrite (app_removelast_last 0%uint63 Hne) at 2.
         apply in_or_app. right. left. reflexivity. }
       (* First: n + last_u fits in int without overflow *)
-      assert (Hadd_ok : to_Z (add n63 (List.last (x0 :: xs') 0 >> l63)) =
+      assert (Hadd_ok : to_Z (add n63 (List.last (x0 :: xs') 0%uint63 >> l63)) =
         (Z.of_nat n_nat + last_u)%Z).
       { rewrite add_spec, Hn63_val. fold last_u.
         rewrite Z.mod_small; [reflexivity|].
         split; [lia|]. exact Hn_last_u_wB. }
       (* Division and +1 don't overflow *)
-      assert (Hdiv_ok : to_Z (div (add n63 (List.last (x0 :: xs') 0 >> l63)) wbits) =
+      assert (Hdiv_ok : to_Z (div (add n63 (List.last (x0 :: xs') 0%uint63 >> l63)) wbits) =
         ((Z.of_nat n_nat + last_u) / 63)%Z).
       { rewrite div_spec by discriminate. rewrite Hadd_ok.
         change (to_Z wbits) with (63 : Z). reflexivity. }
@@ -1116,158 +2235,35 @@ Proof.
       (* From Hp_lt: to_Z p < length(build_upper ...) *)
       (* build_upper length bound: length <= n + last_u (last upper value) *)
       assert (Hp_bound : to_Z p <= Z.of_nat n_nat + last_u - 1).
-      { (* Use length_build_upper: length = last(uppers) + length(uppers) *)
-        set (ups := map (fun x : int => upper_value (to_Z l63) (to_Z x)) (x0 :: xs')).
-        assert (Hups_ne : ups <> []) by (unfold ups; discriminate).
-        assert (Hups_nn : Forall (fun u => 0 <= u) ups).
-        { unfold ups. rewrite Forall_forall. intros u Hu.
-          apply in_map_iff in Hu. destruct Hu as [x [Hux Hx]]. subst u.
-          unfold upper_value. rewrite Z.shiftr_div_pow2 by lia.
-          apply Z.div_pos; [|apply Z.pow_pos_nonneg; lia].
-          unfold all_nonneg in Hnn. rewrite Forall_forall in Hnn.
-          apply Hnn. unfold to_Z_list. apply in_map. exact Hx. }
-        assert (Hups_sorted : sorted ups).
-        { unfold ups. rewrite Hmap_eq. unfold uppers.
-          assert (Hgen : forall zs, sorted zs ->
-            sorted (map (upper_value lZ) zs)).
-          { intros zs. induction zs as [|a rest' IHs].
-            - constructor.
-            - intros Hsrt. inversion Hsrt as [|? ? Hsort_rest HF_le]; subst.
-              constructor; [exact (IHs Hsort_rest)|].
-              rewrite Forall_forall. intros u Hu.
-              apply in_map_iff in Hu. destruct Hu as [b [Hub Hbin]]. subst u.
-              unfold upper_value. rewrite !Z.shiftr_div_pow2 by lia.
-              apply Z.div_le_mono; [apply Z.pow_pos_nonneg; lia|].
-              rewrite Forall_forall in HF_le. exact (HF_le _ Hbin). }
-          exact (Hgen _ Hs). }
-        assert (Hlen_eq : (Z.of_nat (List.length (build_upper ups)) =
-          last ups 0%Z + Z.of_nat (List.length ups))%Z).
-        { exact (length_build_upper ups Hups_ne Hups_nn Hups_sorted). }
-        (* last ups = last_u *)
-        assert (Hlast_ups : last ups 0%Z = last_u).
-        { unfold ups, last_u. unfold upper_value.
-          (* Prove: last (map (Z.shiftr _ (to_Z l63)) (x0 :: xs')) 0 =
-                    to_Z (last (x0 :: xs') 0) / 2^(to_Z l63) *)
-          rewrite lsr_spec.
-          (* Need: last (map f (x0::xs')) 0 = f (last (x0::xs') 0) *)
-          assert (Hml : forall (A B : Type) (f : A -> B) (l : list A) (da : A) (db : B),
-            l <> [] -> last (map f l) db = f (last l da)).
-          { intros A B f l da db Hne'.
-            rewrite (app_removelast_last da Hne').
-            rewrite map_app. simpl map.
-            rewrite !last_last. reflexivity. }
-          rewrite (Hml int Z _ _ 0 0%Z Hne).
-          rewrite Z.shiftr_div_pow2 by lia. reflexivity. }
-        (* length ups = n_nat *)
-        assert (Hlen_ups : List.length ups = n_nat).
-        { unfold ups. rewrite length_map. reflexivity. }
-        rewrite Hlast_ups, Hlen_ups in Hlen_eq.
-        fold ups in Hp_lt.
-        (* Hp_lt: to_Z p < Z.of_nat(List.length(build_upper ups))
-           Hlen_eq: Z.of_nat(List.length(build_upper ups)) = last_u + n_nat
-           Goal: to_Z p <= n_nat + last_u - 1 *)
+      { assert (Hlen_eq : Z.of_nat (List.length
+          (build_upper (map (fun x => upper_value (to_Z l63) (to_Z x)) (x0 :: xs')))) =
+          last_u + Z.of_nat n_nat).
+        { rewrite Hmap_eq.
+          rewrite (build_upper_length_eq lZ (x0 :: xs') Hne Hl_nn Hs Hnn).
+          unfold last_u, n_nat. rewrite lsr_spec.
+          rewrite Hl_agree. reflexivity. }
         lia. }
       assert (to_Z p / 63 <= (Z.of_nat n_nat + last_u - 1) / 63)%Z.
       { apply Z.div_le_mono; lia. }
       assert ((Z.of_nat n_nat + last_u - 1) / 63 < (Z.of_nat n_nat + last_u) / 63 + 1)%Z.
-      { assert (HH := Z.div_mod (Z.of_nat n_nat + last_u - 1) 63 ltac:(lia)).
-        assert (HH2 := Z.div_mod (Z.of_nat n_nat + last_u) 63 ltac:(lia)).
-        assert (0 <= (Z.of_nat n_nat + last_u - 1) mod 63 < 63)%Z
-          by (apply Z.mod_pos_bound; lia).
-        assert (0 <= (Z.of_nat n_nat + last_u) mod 63 < 63)%Z
-          by (apply Z.mod_pos_bound; lia).
-        nia. }
+      { enough ((Z.of_nat n_nat + last_u - 1) / 63 <= (Z.of_nat n_nat + last_u) / 63)%Z by lia.
+        apply Z.div_le_mono; lia. }
       lia.
     - (* no overflow *)
-      (* Bound: length(build_upper_aux us prev) <= max_element - prev + length us *)
-      (* For build_upper from 0: length <= last_upper + n *)
-      (* We prove a bound: each element of build_upper_aux adds at most gap + 1 booleans *)
-      enough (Hsuff :
+      assert (Hsuff :
         Z.of_nat (Datatypes.length
           (build_upper (map (fun x : int => upper_value (to_Z l63) (to_Z x)) (x0 :: xs')))) <=
         Z.of_nat n_nat + to_Z U).
-      { assert (Hsum' : Z.of_nat n_nat + to_Z U < wB).
-        { unfold to_Z_list in Hsum_wB. rewrite length_map in Hsum_wB.
-          fold n_nat in Hsum_wB. exact Hsum_wB. }
-        lia. }
-      (* Prove the bound using Forall to bound all upper values *)
-      rewrite Hmap_eq. unfold build_upper.
-      (* We need: length(build_upper_aux uppers 0) <= n_nat + to_Z U *)
-      (* where uppers = map (upper_value lZ) (to_Z_list (x0 :: xs')),
-         all uppers are in [0, to_Z U), and length uppers = n_nat *)
-      fold uppers.
-      (* Use an inductive bound *)
-      assert (Hbd : forall (us : list Z) (prev : Z),
-        Forall (fun u : Z => (u >= prev)%Z) us ->
-        Forall (fun u : Z => (u < to_Z U)%Z) us ->
-        sorted us ->
-        (0 <= prev)%Z ->
-        (Z.of_nat (Datatypes.length (build_upper_aux us prev)) <=
-          Z.of_nat (Datatypes.length us) + Z.max (0%Z) (to_Z U - prev))%Z).
-      { intros us prev Hge0 Hbd0 HSS Hprev0.
-        revert prev Hge0 Hprev0. induction us as [|u rest IHu]; intros prev Hge0 Hprev0.
-        - simpl. lia.
-        - inversion Hge0 as [|? ? Hu_ge Hge_rest]; subst.
-          inversion Hbd0 as [|? ? Hu_bd Hbd_rest]; subst.
-          unfold sorted in HSS.
-          inversion HSS as [|? ? HSS_rest HF_le]; subst.
-          simpl build_upper_aux.
-          rewrite length_app, repeat_length.
-          assert (Hrest_ge : Forall (fun v : Z => (v >= u)%Z) rest).
-          { revert HF_le. apply Forall_impl. intros a Ha. lia. }
-          assert (Hu_nn : (0 <= u)%Z) by lia.
-          assert (HSS_rest' : sorted rest) by exact HSS_rest.
-          specialize (IHu Hbd_rest HSS_rest' u Hrest_ge Hu_nn).
-          change (Datatypes.length (true :: build_upper_aux rest u))
-            with (S (Datatypes.length (build_upper_aux rest u))).
-          change (Datatypes.length (u :: rest)) with (S (Datatypes.length rest)).
-          rewrite !Nat2Z.inj_add, !Nat2Z.inj_succ.
-          rewrite (Z2Nat.id (u - prev)%Z) by lia.
-          rewrite Z.max_r in IHu by lia.
-          rewrite Z.max_r by lia.
-          lia. }
-      (* Prove sorted uppers *)
-      assert (HSS_uppers : sorted uppers).
-      { unfold uppers, sorted, to_Z_list.
-        unfold sorted in Hs. unfold to_Z_list in Hs.
-        assert (Hl_nn' : (0 <= lZ)%Z) by lia.
-        generalize Hl_nn' (map to_Z (x0 :: xs')) Hs. clear.
-        intros Hl_nn zs Hs.
-        induction zs as [|z zs' IHz].
-        - constructor.
-        - inversion Hs as [|? ? HSS' HF_le]; subst.
-          constructor.
-          + exact (IHz HSS').
-          + rewrite Forall_forall in HF_le |- *.
-            intros a Ha. apply in_map_iff in Ha.
-            destruct Ha as [x [<- Hx]].
-            apply upper_value_mono; [lia | apply HF_le; exact Hx]. }
-      apply Z.le_trans with (Z.of_nat (Datatypes.length uppers) + Z.max 0 (to_Z U - 0))%Z.
-      { apply Hbd.
-        - unfold uppers. apply Forall_forall. intros u Hu.
-          apply in_map_iff in Hu. destruct Hu as [z [<- Hz]].
-          assert (Hnn_z : (0 <= z)%Z).
-          { unfold all_nonneg, to_Z_list in Hnn. rewrite Forall_forall in Hnn.
-            apply Hnn. exact Hz. }
-          pose proof (upper_value_nonneg lZ z Hl_nn Hnn_z). lia.
-        - unfold uppers. apply Forall_forall. intros u Hu.
-          apply in_map_iff in Hu. destruct Hu as [z [<- Hz]].
-          unfold upper_value. rewrite Z.shiftr_div_pow2 by lia.
-          unfold bounded_by, to_Z_list in Hb. rewrite Forall_forall in Hb.
-          assert (Hz_bnd : z < to_Z U) by (apply Hb; exact Hz).
-          apply Z.le_lt_trans with z; [|exact Hz_bnd].
-          apply Z.div_le_upper_bound; [apply Z.pow_pos_nonneg; lia|].
-          assert (Hznn : (0 <= z)%Z).
-          { unfold all_nonneg, to_Z_list in Hnn. rewrite Forall_forall in Hnn.
-            apply Hnn. exact Hz. }
-          assert (1 <= 2 ^ lZ)%Z by (change 1%Z with (2^0)%Z; apply Z.pow_le_mono_r; lia).
-          nia.
-        - exact HSS_uppers.
-        - lia. }
-      unfold uppers, to_Z_list. rewrite !length_map. fold n_nat. lia.
+      { rewrite Hmap_eq.
+        pose proof (build_upper_length_le lZ (to_Z U) (x0 :: xs') Hne Hl_nn HU_pos Hs Hnn Hb).
+        unfold n_nat, to_Z_list in *. rewrite length_map in *. lia. }
+      assert (Hsum' : Z.of_nat n_nat + to_Z U < wB).
+      { unfold to_Z_list in Hsum_wB. rewrite length_map in Hsum_wB.
+        fold n_nat in Hsum_wB. exact Hsum_wB. }
+      lia.
     - (* initial bv is zero *)
       intro q. apply bv_get_make_zero. }
-  assert (Henc_upper : ef63_upper enc63 = fill_upper (x0 :: xs') l63 bv0 0 0).
+  assert (Henc_upper : ef63_upper enc63 = fill_upper (x0 :: xs') l63 bv0 0%uint63 0%uint63).
   { unfold enc63, encode63, bv0, l63, n63, n_nat. reflexivity. }
   assert (Hupper : forall j, (j < List.length (ef_upper encZ))%nat ->
     bv_get (ef63_upper enc63) (of_Z (Z.of_nat j)) =
@@ -1280,12 +2276,12 @@ Proof.
     rewrite (nth_map_safe (lower_bits lZ) (to_Z_list (x0 :: xs')) i_nat 0%Z 0%Z).
     2: { unfold to_Z_list. rewrite length_map. exact Hlen. }
     unfold to_Z_list.
-    rewrite (nth_map_safe to_Z (x0 :: xs') i_nat 0 0%Z) by exact Hlen.
+    rewrite (nth_map_safe to_Z (x0 :: xs') i_nat 0%uint63 0%Z) by exact Hlen.
     replace i with (of_Z (Z.of_nat i_nat)).
     2: { apply to_Z_inj. rewrite of_Z_spec. rewrite Z.mod_small.
          - exact Hi_nat.
          - change Uint63.wB with (2^63)%Z. unfold wB in *. lia. }
-    assert (Henc_lower : ef63_lower enc63 = fill_lower (x0 :: xs') mask (make n63 0) 0).
+    assert (Henc_lower : ef63_lower enc63 = fill_lower (x0 :: xs') mask (make n63 0%uint63) 0%nat).
     { unfold enc63, encode63, mask, l63, n63, n_nat. reflexivity. }
     rewrite Henc_lower.
     replace lZ with (to_Z l63) by exact Hl_agree.
@@ -1325,17 +2321,145 @@ Proof.
       { lia. }
       { split; [lia|]. change Uint63.wB with wB. lia. }
     - exact Hlen. }
+  (* ---- bv0 size facts ---- *)
+  set (last_u := to_Z (List.last (x0 :: xs') 0%uint63 >> l63)).
+  set (bv_size := add (div (add n63 (List.last (x0 :: xs') 0%uint63 >> l63)) wbits) 1).
+  assert (Hlast_u_eq : last_u = upper_value (to_Z l63) (to_Z (List.last (x0 :: xs') 0%uint63))).
+  { unfold last_u. apply lsr_upper_value. exact Hl63_nn. }
+  assert (Hlast_u_bound : last_u < to_Z U).
+  { rewrite Hlast_u_eq. unfold upper_value.
+    rewrite Z.shiftr_div_pow2 by lia.
+    apply Z.le_lt_trans with (to_Z (List.last (x0 :: xs') 0%uint63)); [|].
+    - apply Z.div_le_upper_bound; [apply Z.pow_pos_nonneg; lia|].
+      assert (1 <= 2 ^ to_Z l63)%Z by (change 1%Z with (2^0)%Z; apply Z.pow_le_mono_r; lia).
+      pose proof (to_Z_bounded (List.last (x0 :: xs') 0%uint63)). nia.
+    - unfold bounded_by, to_Z_list in Hb. rewrite Forall_forall in Hb.
+      apply Hb. apply in_map.
+      rewrite (app_removelast_last 0%uint63 Hne) at 2.
+      apply in_or_app. right. left. reflexivity. }
+  assert (Hlast_u_nn : (0 <= last_u)%Z).
+  { unfold last_u. pose proof (to_Z_bounded (List.last (x0 :: xs') 0%uint63 >> l63)). lia. }
+  assert (Hn_last_u_wB : (Z.of_nat n_nat + last_u < wB)%Z).
+  { unfold to_Z_list in Hsum_wB. rewrite length_map in Hsum_wB.
+    fold n_nat in Hsum_wB. lia. }
+  assert (Hn_last_u_max : (Z.of_nat n_nat + last_u < to_Z max_length * 63)%Z).
+  { unfold to_Z_list in Hmax. rewrite length_map in Hmax.
+    fold n_nat in Hmax. change (to_Z wbits) with (63 : Z) in Hmax. lia. }
+  (* Concrete wB for lia *)
+  assert (HwB_concrete : wB = 9223372036854775808%Z) by reflexivity.
+  assert (HUwB_concrete : Uint63.wB = 9223372036854775808%Z) by reflexivity.
+  assert (HAUwB_concrete : Uint63Axioms.wB = 9223372036854775808%Z) by reflexivity.
+  assert (Hsize_ok : to_Z bv_size = ((Z.of_nat n_nat + last_u) / 63 + 1)%Z).
+  { unfold bv_size. rewrite add_spec.
+    assert (Hdiv_ok : to_Z (div (add n63 (List.last (x0 :: xs') 0%uint63 >> l63)) wbits) =
+      ((Z.of_nat n_nat + last_u) / 63)%Z).
+    { rewrite div_spec by discriminate. change (to_Z wbits) with (63 : Z).
+      rewrite add_spec. unfold last_u. rewrite Hn63_val.
+      rewrite Z.mod_small; [reflexivity|].
+      pose proof (to_Z_bounded (List.last (x0 :: xs') 0%uint63 >> l63)) as Htmp.
+      rewrite HAUwB_concrete in Htmp. rewrite HwB_concrete in Hn_last_u_wB.
+      change Uint63.wB with 9223372036854775808%Z. split; lia. }
+    rewrite Hdiv_ok. change (to_Z 1) with (1 : Z).
+    rewrite Z.mod_small; [reflexivity|].
+    assert (Hdiv_nn : (0 <= (Z.of_nat n_nat + last_u) / 63)%Z) by (apply Z.div_pos; lia).
+    assert (Hml0 : to_Z max_length = 4194303%Z) by reflexivity.
+    rewrite Hml0 in Hn_last_u_max.
+    assert ((Z.of_nat n_nat + last_u) / 63 < 4194303)%Z
+      by (apply Z.div_lt_upper_bound; lia).
+    change Uint63.wB with 9223372036854775808%Z. lia. }
+  assert (Hbv_le_max : to_Z bv_size <= to_Z max_length).
+  { rewrite Hsize_ok.
+    assert (Hml : to_Z max_length = 4194303%Z) by reflexivity.
+    rewrite Hml.
+    change (to_Z wbits) with (63 : Z) in Hmax.
+    rewrite Hml in Hn_last_u_max.
+    assert ((Z.of_nat n_nat + last_u) / 63 < 4194303)%Z.
+    { apply Z.div_lt_upper_bound; lia. }
+    lia. }
+  assert (Hbv_len : PArray.length (ef63_upper enc63) = bv_size).
+  { rewrite Henc_upper, fill_upper_length. unfold bv0. rewrite length_make'.
+    fold bv_size.
+    assert (Hleb : (bv_size <=? max_length)%uint63 = true) by (apply leb_spec; lia).
+    rewrite Hleb. reflexivity. }
+  assert (Hbv_size_Z : to_Z (PArray.length (ef63_upper enc63)) = to_Z bv_size)
+    by (rewrite Hbv_len; reflexivity).
+  assert (Hbv_size_ov : (to_Z bv_size * 63 < wB)%Z).
+  { rewrite Hsize_ok.
+    assert (Hml2 : to_Z max_length = 4194303%Z) by reflexivity.
+    rewrite Hml2 in Hn_last_u_max.
+    assert (Hd : ((Z.of_nat n_nat + last_u) / 63 < 4194303)%Z)
+      by (apply Z.div_lt_upper_bound; lia).
+    assert (((Z.of_nat n_nat + last_u) / 63 + 1) * 63 <= 4194303 * 63)%Z by lia.
+    unfold wB. change (2^63)%Z with 9223372036854775808%Z. lia. }
+  assert (Hbu_len : Z.of_nat (List.length (build_upper uppers)) =
+    (last_u + Z.of_nat n_nat)%Z).
+  { unfold uppers. rewrite <- Hl_agree.
+    rewrite (build_upper_length_eq (to_Z l63) (x0 :: xs') Hne Hl63_nn Hs Hnn).
+    unfold last_u. rewrite lsr_spec.
+    unfold n_nat. lia. }
   (* ---- bv_select agreement ---- *)
   assert (Hsel : to_Z (bv_select (ef63_upper enc63) i) =
     Z.of_nat (position_of_ith_one (ef_upper encZ) i_nat)).
-  { apply bv_select_agrees.
+  { replace i_nat with (to_nat i) by (unfold i_nat; reflexivity).
+    pose proof (bv_select_agrees (ef63_upper enc63) (ef_upper encZ) i) as H.
+    assert (Hbsel := to_Z_bounded (bv_select (ef63_upper enc63) i)).
+    rewrite <- (Z2Nat.id (to_Z (bv_select (ef63_upper enc63) i))) by lia.
+
+    f_equal. apply H.
     - intros j Hj.
       change (ef_upper encZ) with (build_upper uppers) in Hj.
       exact (Hupper j Hj).
+    - (* zero bits beyond list *)
+      change (ef_upper encZ) with (build_upper uppers).
+      intros j Hj.
+      rewrite Henc_upper.
+      (* Bridge: uppers = map (upper_value lZ) ..., fill_upper_zero_tail uses to_Z l63 *)
+      assert (Huppers_eq : map (upper_value (to_Z l63)) (to_Z_list (x0 :: xs')) = uppers).
+      { unfold uppers. rewrite Hl_agree. reflexivity. }
+      apply (fill_upper_zero_tail (x0 :: xs') l63 bv0).
+      + exact Hl63_nn.
+      + exact Hs.
+      + exact Hnn.
+      + exact Hne.
+      + (* overflow *)
+        rewrite Huppers_eq. rewrite Hbu_len. lia.
+      + (* PArray.length bv0 = ... *)
+        assert (Hbv0_len : PArray.length bv0 = bv_size).
+        { rewrite <- Hbv_len, Henc_upper. rewrite fill_upper_length. reflexivity. }
+        rewrite Hbv0_len. unfold bv_size, n63, n_nat. reflexivity.
+      + (* bv * 63 < wB *)
+        assert (Hbv0_len : PArray.length bv0 = bv_size).
+        { rewrite <- Hbv_len, Henc_upper. rewrite fill_upper_length. reflexivity. }
+        rewrite Hbv0_len. exact Hbv_size_ov.
+      + (* bounds callback *)
+        intros p' Hp'1 Hp'2.
+        rewrite Huppers_eq in Hp'2. rewrite Hbu_len in Hp'2.
+        assert (Hbv0_len : PArray.length bv0 = bv_size).
+        { rewrite <- Hbv_len, Henc_upper. rewrite fill_upper_length. reflexivity. }
+        apply ltb_spec. rewrite div_spec by discriminate.
+        rewrite Hbv0_len. rewrite Hsize_ok. change (to_Z wbits) with (63 : Z).
+        assert (to_Z p' / 63 <= (last_u + Z.of_nat n_nat - 1) / 63)%Z.
+        { apply Z.div_le_mono; lia. }
+        assert ((last_u + Z.of_nat n_nat - 1) / 63 <= (Z.of_nat n_nat + last_u) / 63)%Z.
+        { apply Z.div_le_mono; lia. }
+        lia.
+      + intro q. apply bv_get_make_zero.
+      + rewrite Huppers_eq. exact Hj.
     - change (ef_upper encZ) with (build_upper uppers).
       rewrite count_occ_build_upper.
       unfold uppers. rewrite length_map. unfold to_Z_list. rewrite length_map.
-      exact Hlen. }
+      exact Hlen.
+    - (* list covered by array *)
+      change (ef_upper encZ) with (build_upper uppers).
+      apply Nat2Z.inj_le. rewrite Hbu_len.
+      rewrite Nat2Z.inj_mul.
+      rewrite Z2Nat.id by (rewrite Hbv_size_Z, Hsize_ok; apply Z.le_le_succ_r; apply Z.div_pos; lia).
+      rewrite Hbv_size_Z, Hsize_ok.
+      assert (Hdm := Z.div_mod (Z.of_nat n_nat + last_u) 63 ltac:(lia)).
+      assert (Hmod_bnd := Z.mod_pos_bound (Z.of_nat n_nat + last_u) 63 ltac:(lia)).
+      nia.
+    - (* no overflow *)
+      rewrite Hbv_size_Z. exact Hbv_size_ov. }
   (* ---- position_of_ith_one value ---- *)
   assert (Hpos_val : position_of_ith_one (ef_upper encZ) i_nat =
     (Z.to_nat (nth i_nat uppers 0%Z) + i_nat)%nat).
@@ -1350,7 +2474,7 @@ Proof.
   { assert (Hupper_nn : (0 <= nth i_nat uppers 0)%Z).
     { unfold uppers. rewrite (nth_map_safe (upper_value lZ) (to_Z_list (x0 :: xs')) i_nat 0%Z 0%Z).
       - apply upper_value_nonneg; [lia|].
-        unfold to_Z_list. rewrite (nth_map_safe to_Z (x0 :: xs') i_nat 0 0%Z) by exact Hlen.
+        unfold to_Z_list. rewrite (nth_map_safe to_Z (x0 :: xs') i_nat 0%uint63 0%Z) by exact Hlen.
         pose proof (to_Z_bounded (nth i_nat (x0 :: xs') (0 : int))). lia.
       - unfold to_Z_list. rewrite length_map. exact Hlen. }
     rewrite sub_nonneg.
@@ -1365,7 +2489,7 @@ Proof.
       unfold uppers. rewrite (nth_map_safe (upper_value lZ) (to_Z_list (x0 :: xs')) i_nat 0%Z 0%Z).
       2: { unfold to_Z_list. rewrite length_map. exact Hlen. }
       unfold to_Z_list.
-      rewrite (nth_map_safe to_Z (x0 :: xs') i_nat 0 0%Z) by exact Hlen.
+      rewrite (nth_map_safe to_Z (x0 :: xs') i_nat 0%uint63 0%Z) by exact Hlen.
       set (xi := nth i_nat (x0 :: xs') (0 : int)).
       assert (Hxi_bnd : to_Z xi < to_Z U).
       { unfold bounded_by in Hb. rewrite Forall_forall in Hb.
@@ -1392,7 +2516,7 @@ Proof.
     rewrite (nth_map_safe (upper_value lZ) (to_Z_list (x0 :: xs')) i_nat 0%Z 0%Z).
     2: { unfold to_Z_list. rewrite length_map. exact Hlen. }
     unfold to_Z_list.
-    rewrite (nth_map_safe to_Z (x0 :: xs') i_nat 0 0%Z) by exact Hlen.
+    rewrite (nth_map_safe to_Z (x0 :: xs') i_nat 0%uint63 0%Z) by exact Hlen.
     assert (Huv_nn : (0 <= upper_value lZ (to_Z (nth i_nat (x0 :: xs') (0 : int))))%Z)
       by (apply upper_value_nonneg; [lia | pose proof (to_Z_bounded (nth i_nat (x0 :: xs') (0 : int))); lia]).
     rewrite !Nat2Z.inj_add, !Z2Nat.id by lia. lia.
@@ -1401,7 +2525,7 @@ Proof.
     assert (Hupper_nn : (0 <= nth i_nat uppers 0)%Z).
     { unfold uppers. rewrite (nth_map_safe (upper_value lZ) (to_Z_list (x0 :: xs')) i_nat 0%Z 0%Z).
       - apply upper_value_nonneg; [lia|].
-        unfold to_Z_list. rewrite (nth_map_safe to_Z (x0 :: xs') i_nat 0 0%Z) by exact Hlen.
+        unfold to_Z_list. rewrite (nth_map_safe to_Z (x0 :: xs') i_nat 0%uint63 0%Z) by exact Hlen.
         pose proof (to_Z_bounded (nth i_nat (x0 :: xs') (0 : int))). lia.
       - unfold to_Z_list. rewrite length_map. exact Hlen. }
     rewrite Nat2Z.inj_add, Z2Nat.id by lia. rewrite <- Hi_nat. lia.
@@ -1415,7 +2539,7 @@ Proof.
     rewrite (nth_map_safe (lower_bits lZ) (to_Z_list (x0 :: xs')) i_nat 0%Z 0%Z).
     2: { unfold to_Z_list. rewrite length_map. exact Hlen. }
     unfold to_Z_list.
-    rewrite (nth_map_safe to_Z (x0 :: xs') i_nat 0 0%Z) by exact Hlen.
+    rewrite (nth_map_safe to_Z (x0 :: xs') i_nat 0%uint63 0%Z) by exact Hlen.
     unfold lower_bits. rewrite Z.land_ones by lia. apply Z.mod_pos_bound.
     apply Z.pow_pos_nonneg; lia.
   - (* sum < wB — the value is bounded_by U < wB *)
@@ -1434,7 +2558,7 @@ Proof.
     rewrite (nth_map_safe (upper_value lZ) (to_Z_list (x0 :: xs')) i_nat 0%Z 0%Z).
     2: { unfold to_Z_list. rewrite length_map. exact Hlen. }
     unfold to_Z_list.
-    rewrite !(nth_map_safe to_Z (x0 :: xs') i_nat 0 0%Z) by exact Hlen.
+    rewrite !(nth_map_safe to_Z (x0 :: xs') i_nat 0%uint63 0%Z) by exact Hlen.
     fold xi.
     assert (Huv_nn : (0 <= upper_value lZ (to_Z xi))%Z)
       by (apply upper_value_nonneg; [lia|lia]).
@@ -1526,7 +2650,7 @@ Lemma decode63_aux_nth : forall enc n i j,
   (j < n)%nat ->
   (to_Z i + Z.of_nat n < wB)%Z ->
   (0 <= to_Z i)%Z ->
-  nth j (decode63_aux enc i n) 0 = access63 enc (of_Z (to_Z i + Z.of_nat j)).
+  nth j (decode63_aux enc i n) 0%uint63 = access63 enc (of_Z (to_Z i + Z.of_nat j)).
 Proof.
   intros enc n. revert enc. induction n as [|n' IH]; intros enc i j Hj Hov Hi0.
   - lia.
@@ -1642,15 +2766,15 @@ Proof.
   set (n_nat := Z.to_nat (to_Z (ef63_n enc63))).
   assert (Hn : n_nat = List.length xs) by (apply encode63_n_agrees; exact Hir).
   apply nth_ext with (d := 0%Z) (d' := 0%Z).
-  - rewrite map_length, decode63_aux_length. unfold to_Z_list. rewrite map_length. lia.
+  - rewrite length_map, decode63_aux_length. unfold to_Z_list. rewrite length_map. lia.
   - intros j Hj.
-    rewrite map_length, decode63_aux_length in Hj.
+    rewrite length_map, decode63_aux_length in Hj.
     change 0%Z with (to_Z 0) at 1.
     rewrite map_nth.
     rewrite decode63_aux_nth.
     + change (to_Z 0) with 0%Z. rewrite Z.add_0_l.
       assert (Hj_wB : (Z.of_nat j < wB)%Z).
-      { destruct Hir as [_ [_ [Hn' _]]]. unfold to_Z_list in Hn'. rewrite map_length in Hn'. lia. }
+      { destruct Hir as [_ [_ [Hn' _]]]. unfold to_Z_list in Hn'. rewrite length_map in Hn'. lia. }
       assert (HtoZ : to_Z (of_Z (Z.of_nat j)) = Z.of_nat j)
         by (apply to_Z_of_Z_small; lia).
       subst enc63.
@@ -1661,7 +2785,7 @@ Proof.
       * rewrite HtoZ. rewrite Nat2Z.id. lia.
     + lia.
     + change (to_Z 0) with 0%Z.
-      destruct Hir as [_ [_ [Hn' _]]]. unfold to_Z_list in Hn'. rewrite map_length in Hn'. lia.
+      destruct Hir as [_ [_ [Hn' _]]]. unfold to_Z_list in Hn'. rewrite length_map in Hn'. lia.
     + change (to_Z 0) with 0%Z. lia.
 Qed.
 

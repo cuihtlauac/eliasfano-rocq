@@ -6,3 +6,8 @@
  (name bench_ocaml)
  (modules bench_ocaml)
  (libraries elias_fano))
+
+(executable
+ (name bench_extracted)
+ (modules bench_extracted)
+ (libraries elias_fano_int63))

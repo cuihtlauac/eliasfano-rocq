@@ -8,7 +8,7 @@ SUX="$SCRIPT_DIR/sux"
 
 # Build everything
 echo "=== Building ==="
-PATH="$ROOT/_opam/bin:/usr/bin:/bin:$PATH" dune build bench/gen_data.exe bench/bench_ocaml.exe 2>/dev/null
+PATH="$ROOT/_opam/bin:/usr/bin:/bin:$PATH" dune build bench/gen_data.exe bench/bench_ocaml.exe bench/bench_extracted.exe 2>/dev/null
 
 if [ ! -f "$SUX/bench_sux" ]; then
   echo "Compiling Sux benchmark..."
@@ -20,21 +20,21 @@ fi
 echo ""
 
 oracle_check() {
-  local sux_file="$1" ocaml_file="$2"
+  local ref_file="$1" check_file="$2" ref_prefix="$3" check_prefix="$4"
   local MISMATCHES=0
-  while IFS= read -r sux_line; do
-    if [[ "$sux_line" == sux\ access* ]] || [[ "$sux_line" == sux\ nextGEQ* ]] || [[ "$sux_line" == sux\ decode_check* ]]; then
-      query=$(echo "$sux_line" | sed 's/sux //' | sed 's/ \[.*$//')
-      ocaml_line=$(grep "ocaml ${query%%=*}" "$ocaml_file" 2>/dev/null | head -1 || true)
-      if [ -n "$ocaml_line" ]; then
-        ocaml_result=$(echo "$ocaml_line" | sed 's/ocaml //' | sed 's/ \[.*$//')
-        if [ "$query" != "$ocaml_result" ]; then
-          echo "MISMATCH: sux=$query vs ocaml=$ocaml_result"
+  while IFS= read -r ref_line; do
+    if [[ "$ref_line" == ${ref_prefix}\ access* ]] || [[ "$ref_line" == ${ref_prefix}\ nextGEQ* ]] || [[ "$ref_line" == ${ref_prefix}\ decode_check* ]]; then
+      query=$(echo "$ref_line" | sed "s/${ref_prefix} //" | sed 's/ \[.*$//')
+      check_line=$(grep "${check_prefix} ${query%%=*}" "$check_file" 2>/dev/null | head -1 || true)
+      if [ -n "$check_line" ]; then
+        check_result=$(echo "$check_line" | sed "s/${check_prefix} //" | sed 's/ \[.*$//')
+        if [ "$query" != "$check_result" ]; then
+          echo "MISMATCH: ${ref_prefix}=$query vs ${check_prefix}=$check_result"
           MISMATCHES=$((MISMATCHES + 1))
         fi
       fi
     fi
-  done < "$sux_file"
+  done < "$ref_file"
   if [ "$MISMATCHES" -eq 0 ]; then
     echo "OK: all results match"
   else
@@ -61,11 +61,15 @@ EOF
 echo "=== Test: [3, 7, 42], universe=100 ==="
 echo "--- Sux (C++) ---"
 "$SUX/bench_sux" < "$DATA" | tee "${DATA}.sux"
-echo "--- OCaml (verified) ---"
+echo "--- OCaml hand-written ---"
 "$BUILD/bench_ocaml.exe" < "$DATA" | tee "${DATA}.ocaml"
-echo "--- Oracle comparison ---"
-oracle_check "${DATA}.sux" "${DATA}.ocaml"
-rm -f "$DATA" "${DATA}.sux" "${DATA}.ocaml"
+echo "--- OCaml extracted ---"
+"$BUILD/bench_extracted.exe" < "$DATA" | tee "${DATA}.extracted"
+echo "--- Oracle: sux vs hand-written ---"
+oracle_check "${DATA}.sux" "${DATA}.ocaml" "sux" "ocaml"
+echo "--- Oracle: sux vs extracted ---"
+oracle_check "${DATA}.sux" "${DATA}.extracted" "sux" "extracted"
+rm -f "$DATA" "${DATA}.sux" "${DATA}.ocaml" "${DATA}.extracted"
 echo ""
 
 # --- Test 2+: Generated data at increasing sizes ---
@@ -80,12 +84,17 @@ for N in 1000 10000 100000; do
   echo "--- Sux (C++) ---"
   "$SUX/bench_sux" < "$DATA" | tee "${DATA}.sux"
 
-  echo "--- OCaml (verified) ---"
+  echo "--- OCaml hand-written ---"
   "$BUILD/bench_ocaml.exe" < "$DATA" | tee "${DATA}.ocaml"
 
-  echo "--- Oracle comparison ---"
-  oracle_check "${DATA}.sux" "${DATA}.ocaml"
+  echo "--- OCaml extracted ---"
+  "$BUILD/bench_extracted.exe" < "$DATA" | tee "${DATA}.extracted"
 
-  rm -f "$DATA" "${DATA}.sux" "${DATA}.ocaml"
+  echo "--- Oracle: sux vs hand-written ---"
+  oracle_check "${DATA}.sux" "${DATA}.ocaml" "sux" "ocaml"
+  echo "--- Oracle: sux vs extracted ---"
+  oracle_check "${DATA}.sux" "${DATA}.extracted" "sux" "extracted"
+
+  rm -f "$DATA" "${DATA}.sux" "${DATA}.ocaml" "${DATA}.extracted"
   echo ""
 done

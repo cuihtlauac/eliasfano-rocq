@@ -5,5 +5,6 @@ From Stdlib Require Import Extraction ExtrOcamlBasic ExtrOcamlNatInt ExtrOcamlZI
 From EliasFano Require Import EliasFano.
 
 (** Extract the public API *)
+Set Warnings "-extraction-default-directory".
 Extraction "EliasFanoOcaml.ml"
   encode decode access nextGEQ bit_size.
