@@ -482,6 +482,16 @@ Proof. exact (get_set_same int t i a). Qed.
 
 <!-- end_slide -->
 
+# Appendix A4: Compositionality Gap
+
+- `valid_input` is only a precondition, never a postcondition
+- No theorem says decode produces valid output from valid input
+- Works here because every proof reduces to ℤ via *agrees*
+- Would not compose if chaining Int63-level operations
+- A compositional design would prove `valid_input U vals -> valid_output (encode63 U vals)`
+
+<!-- end_slide -->
+
 # Appendix: References
 
 **Studies**

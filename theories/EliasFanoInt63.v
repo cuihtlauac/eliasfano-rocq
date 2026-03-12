@@ -35,6 +35,13 @@ Definition in_range (U : Z) (vals : list Z) : Prop :=
 
 Definition to_Z_list (vals : list int) : list Z := map to_Z vals.
 
+(** Bundled precondition: inputs fit in Int63 and satisfy the Z-level invariants. *)
+Definition valid_input (U : int) (vals : list int) : Prop :=
+  in_range (to_Z U) (to_Z_list vals) /\
+  sorted (to_Z_list vals) /\
+  all_nonneg (to_Z_list vals) /\
+  bounded_by (to_Z U) (to_Z_list vals).
+
 (** Integer log2 via [head0] (count leading zeros). *)
 Definition ilog2_63 (x : int) : int :=
   if eqb x 0 then 0 else sub 62 (head0 x).
@@ -2093,16 +2100,13 @@ Qed.
 
 (** Main access agreement. *)
 Theorem access63_agrees : forall U vals i,
-  in_range (to_Z U) (to_Z_list vals) ->
-  sorted (to_Z_list vals) ->
-  all_nonneg (to_Z_list vals) ->
-  bounded_by (to_Z U) (to_Z_list vals) ->
+  valid_input U vals ->
   0 <= to_Z i ->
   (Z.to_nat (to_Z i) < List.length vals)%nat ->
   to_Z (access63 (encode63 U vals) i) =
     access_ef (encode (to_Z U) (to_Z_list vals)) (Z.to_nat (to_Z i)).
 Proof.
-  intros U vals i Hir Hs Hnn Hb Hi Hlen.
+  intros U vals i (Hir & Hs & Hnn & Hb) Hi Hlen.
   destruct vals as [|x0 vals']; [simpl in Hlen; lia|].
   assert (Hne : (x0 :: vals') <> []) by discriminate.
   set (enc63 := encode63 U (x0 :: vals')).
@@ -2570,16 +2574,13 @@ Qed.
 
 (** Access correctness — the payoff. *)
 Corollary access63_correct : forall U vals i,
-  in_range (to_Z U) (to_Z_list vals) ->
-  sorted (to_Z_list vals) ->
-  all_nonneg (to_Z_list vals) ->
-  bounded_by (to_Z U) (to_Z_list vals) ->
+  valid_input U vals ->
   0 <= to_Z i ->
   (Z.to_nat (to_Z i) < List.length vals)%nat ->
   to_Z (access63 (encode63 U vals) i) = List.nth (Z.to_nat (to_Z i)) (to_Z_list vals) 0%Z.
 Proof.
-  intros U vals i Hir Hs Hnn Hb Hi Hlen.
-  rewrite access63_agrees by assumption.
+  intros U vals i (Hir & Hs & Hnn & Hb) Hi Hlen.
+  rewrite access63_agrees; [| exact (conj Hir (conj Hs (conj Hnn Hb))) | ..]; try assumption.
   apply access_ef_correct; try assumption.
   unfold to_Z_list. rewrite length_map. exact Hlen.
 Qed.
@@ -2727,16 +2728,13 @@ Qed.
 
 (** Helper: discharge the access agreement hypothesis of nextGEQ63_aux_agrees. *)
 Lemma access63_agrees_range : forall U vals k,
-  in_range (to_Z U) (to_Z_list vals) ->
-  sorted (to_Z_list vals) ->
-  all_nonneg (to_Z_list vals) ->
-  bounded_by (to_Z U) (to_Z_list vals) ->
+  valid_input U vals ->
   (k < List.length vals)%nat ->
   to_Z (access63 (encode63 U vals) (of_Z (Z.of_nat k))) =
     access_ef (encode (to_Z U) (to_Z_list vals)) k.
 Proof.
-  intros U vals k Hir Hs Hnn Hb Hk.
-  rewrite access63_agrees; try assumption.
+  intros U vals k (Hir & Hs & Hnn & Hb) Hk.
+  rewrite access63_agrees; [| exact (conj Hir (conj Hs (conj Hnn Hb))) | .. ].
   - rewrite to_Z_of_Z_small.
     + rewrite Nat2Z.id. reflexivity.
     + destruct Hir as [_ [_ [Hn _]]]. unfold to_Z_list in Hn. rewrite length_map in Hn. lia.
@@ -2754,13 +2752,10 @@ Qed.
 
 (** Round-trip. *)
 Theorem decode63_agrees : forall U vals,
-  in_range (to_Z U) (to_Z_list vals) ->
-  sorted (to_Z_list vals) ->
-  all_nonneg (to_Z_list vals) ->
-  bounded_by (to_Z U) (to_Z_list vals) ->
+  valid_input U vals ->
   map to_Z (decode63 (encode63 U vals)) = to_Z_list vals.
 Proof.
-  intros U vals Hir Hs Hnn Hb.
+  intros U vals (Hir & Hs & Hnn & Hb).
   unfold decode63.
   set (enc63 := encode63 U vals).
   set (n_nat := Z.to_nat (to_Z (ef63_n enc63))).
@@ -2780,7 +2775,7 @@ Proof.
       subst enc63.
       replace j with (Z.to_nat (to_Z (of_Z (Z.of_nat j)))) at 2
         by (rewrite HtoZ, Nat2Z.id; lia).
-      apply access63_correct; try assumption.
+      apply access63_correct; [exact (conj Hir (conj Hs (conj Hnn Hb))) | ..].
       * rewrite HtoZ. lia.
       * rewrite HtoZ. rewrite Nat2Z.id. lia.
     + lia.
@@ -2791,14 +2786,11 @@ Qed.
 
 (** Shared setup: reduce nextGEQ63 to Z-level nextGEQ via agrees lemma. *)
 Lemma nextGEQ63_to_Z : forall U vals v,
-  in_range (to_Z U) (to_Z_list vals) ->
-  sorted (to_Z_list vals) ->
-  all_nonneg (to_Z_list vals) ->
-  bounded_by (to_Z U) (to_Z_list vals) ->
+  valid_input U vals ->
   option_map to_Z (nextGEQ63 (encode63 U vals) v) =
     nextGEQ (encode (to_Z U) (to_Z_list vals)) (to_Z v).
 Proof.
-  intros U vals v Hir Hs Hnn Hb.
+  intros U vals v (Hir & Hs & Hnn & Hb).
   unfold nextGEQ63, nextGEQ.
   assert (Hn : Z.to_nat (to_Z (ef63_n (encode63 U vals))) = List.length vals)
     by (apply encode63_n_agrees; exact Hir).
@@ -2806,7 +2798,8 @@ Proof.
   { simpl. unfold to_Z_list. apply length_map. }
   rewrite Hn, Hlen.
   apply nextGEQ63_aux_agrees.
-  - intros k Hk. simpl in Hk. apply access63_agrees_range; assumption || lia.
+  - intros k Hk. simpl in Hk.
+    apply access63_agrees_range; [exact (conj Hir (conj Hs (conj Hnn Hb))) | lia].
   - change (to_Z 0) with 0%Z.
     destruct Hir as [_ [_ [Hn' _]]]. unfold to_Z_list in Hn'. rewrite length_map in Hn'. lia.
   - change (to_Z 0) with 0%Z. lia.
@@ -2814,15 +2807,13 @@ Qed.
 
 (** nextGEQ found. *)
 Theorem nextGEQ63_found : forall U vals v r,
-  in_range (to_Z U) (to_Z_list vals) ->
-  sorted (to_Z_list vals) ->
-  all_nonneg (to_Z_list vals) ->
-  bounded_by (to_Z U) (to_Z_list vals) ->
+  valid_input U vals ->
   nextGEQ63 (encode63 U vals) v = Some r ->
   In (to_Z r) (to_Z_list vals) /\ to_Z r >= to_Z v.
 Proof.
-  intros U vals v r Hir Hs Hnn Hb Hfind.
-  pose proof (nextGEQ63_to_Z U vals v Hir Hs Hnn Hb) as Hagree.
+  intros U vals v r Hvi Hfind.
+  destruct Hvi as (Hir & Hs & Hnn & Hb).
+  pose proof (nextGEQ63_to_Z U vals v (conj Hir (conj Hs (conj Hnn Hb)))) as Hagree.
   rewrite Hfind in Hagree. simpl in Hagree.
   exact (nextGEQ_found_thm (to_Z U) (to_Z_list vals) (to_Z v) (to_Z r)
     Hs Hnn Hb (eq_sym Hagree)).
@@ -2830,15 +2821,13 @@ Qed.
 
 (** nextGEQ smallest. *)
 Theorem nextGEQ63_smallest : forall U vals v r,
-  in_range (to_Z U) (to_Z_list vals) ->
-  sorted (to_Z_list vals) ->
-  all_nonneg (to_Z_list vals) ->
-  bounded_by (to_Z U) (to_Z_list vals) ->
+  valid_input U vals ->
   nextGEQ63 (encode63 U vals) v = Some r ->
   forall y, In y (to_Z_list vals) -> y >= to_Z v -> to_Z r <= y.
 Proof.
-  intros U vals v r Hir Hs Hnn Hb Hfind y Hy Hyv.
-  pose proof (nextGEQ63_to_Z U vals v Hir Hs Hnn Hb) as Hagree.
+  intros U vals v r Hvi Hfind y Hy Hyv.
+  destruct Hvi as (Hir & Hs & Hnn & Hb).
+  pose proof (nextGEQ63_to_Z U vals v (conj Hir (conj Hs (conj Hnn Hb)))) as Hagree.
   rewrite Hfind in Hagree. simpl in Hagree.
   exact (nextGEQ_smallest_thm (to_Z U) (to_Z_list vals) (to_Z v) (to_Z r)
     Hs Hnn Hb (eq_sym Hagree) y Hy Hyv).
@@ -2846,15 +2835,13 @@ Qed.
 
 (** nextGEQ none. *)
 Theorem nextGEQ63_none : forall U vals v,
-  in_range (to_Z U) (to_Z_list vals) ->
-  sorted (to_Z_list vals) ->
-  all_nonneg (to_Z_list vals) ->
-  bounded_by (to_Z U) (to_Z_list vals) ->
+  valid_input U vals ->
   nextGEQ63 (encode63 U vals) v = None ->
   forall y, In y (to_Z_list vals) -> y < to_Z v.
 Proof.
-  intros U vals v Hir Hs Hnn Hb Hnone y Hy.
-  pose proof (nextGEQ63_to_Z U vals v Hir Hs Hnn Hb) as Hagree.
+  intros U vals v Hvi Hnone y Hy.
+  destruct Hvi as (Hir & Hs & Hnn & Hb).
+  pose proof (nextGEQ63_to_Z U vals v (conj Hir (conj Hs (conj Hnn Hb)))) as Hagree.
   rewrite Hnone in Hagree. simpl in Hagree.
   exact (nextGEQ_none_thm (to_Z U) (to_Z_list vals) (to_Z v)
     Hs Hnn Hb (eq_sym Hagree) y Hy).
