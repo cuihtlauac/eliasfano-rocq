@@ -330,7 +330,7 @@ Goal: to_Z (access63 (encode63 U vals) i)
 
 <!-- pause -->
 
-- Unfold definitions, expose ℤ/ℕ/Int63 boundaries
+- Unfold definitions, expose ℤ/ℕ/`Int63` boundaries
 - `lia` handles arithmetic, `bitblast` handles bitwise
 - Watch the goal transform step by step
 

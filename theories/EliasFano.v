@@ -10,13 +10,13 @@ Open Scope Z_scope.
 (* Definitions from spec (provided concretely)                        *)
 (* ================================================================= *)
 
-Definition sorted (xs : list Z) : Prop := StronglySorted Z.le xs.
+Definition sorted (vals : list Z) : Prop := StronglySorted Z.le vals.
 
-Definition all_nonneg (xs : list Z) : Prop :=
-  Forall (fun x => 0 <= x) xs.
+Definition all_nonneg (vals : list Z) : Prop :=
+  Forall (fun x => 0 <= x) vals.
 
-Definition bounded_by (U : Z) (xs : list Z) : Prop :=
-  Forall (fun x => x < U) xs.
+Definition bounded_by (U : Z) (vals : list Z) : Prop :=
+  Forall (fun x => x < U) vals.
 
 Fixpoint select_go (bv : list bool) (i : nat) (pos : nat) (count : nat) : nat :=
   match bv with
@@ -184,14 +184,14 @@ Record ef_encoded := mk_ef {
 
 Definition encoded := ef_encoded.
 
-Definition encode (U : Z) (xs : list Z) : encoded :=
-  let n := Z.of_nat (length xs) in
+Definition encode (U : Z) (vals : list Z) : encoded :=
+  let n := Z.of_nat (length vals) in
   let l := num_lower_bits U n in
   mk_ef
-    (map (lower_bits l) xs)
-    (build_upper (map (upper_value l) xs))
+    (map (lower_bits l) vals)
+    (build_upper (map (upper_value l) vals))
     l
-    (length xs).
+    (length vals).
 
 Definition access_ef (enc : encoded) (i : nat) : Z :=
   let pos := position_of_ith_one (ef_upper enc) i in
@@ -278,10 +278,10 @@ Proof.
 Qed.
 
 Lemma Forall_map_upper_nonneg :
-  forall l xs, 0 <= l -> all_nonneg xs ->
-    Forall (fun u => u >= 0) (map (upper_value l) xs).
+  forall l vals, 0 <= l -> all_nonneg vals ->
+    Forall (fun u => u >= 0) (map (upper_value l) vals).
 Proof.
-  intros l xs Hl Hnn.
+  intros l vals Hl Hnn.
   apply Forall_forall. intros u Hu.
   apply in_map_iff in Hu. destruct Hu as [x [<- Hx]].
   assert (0 <= x).
@@ -298,12 +298,12 @@ Proof.
 Qed.
 
 Lemma StronglySorted_nth :
-  forall {A} (R : A -> A -> Prop) (xs : list A) (d : A) (i j : nat),
-    StronglySorted R xs ->
-    (i < j)%nat -> (j < length xs)%nat ->
-    R (nth i xs d) (nth j xs d).
+  forall {A} (R : A -> A -> Prop) (vals : list A) (d : A) (i j : nat),
+    StronglySorted R vals ->
+    (i < j)%nat -> (j < length vals)%nat ->
+    R (nth i vals d) (nth j vals d).
 Proof.
-  intros A R xs d i j Hs Hij Hj. revert i j Hij Hj.
+  intros A R vals d i j Hs Hij Hj. revert i j Hij Hj.
   induction Hs as [|a l Hss IH HF]; intros i j Hij Hj.
   - simpl in Hj. lia.
   - destruct i as [|i'], j as [|j']; simpl in *; try lia.
@@ -312,17 +312,17 @@ Proof.
 Qed.
 
 Lemma StronglySorted_map_upper_nth :
-  forall l xs, 0 <= l -> sorted xs ->
-    forall j k, (j < k)%nat -> (k < length (map (upper_value l) xs))%nat ->
-      nth j (map (upper_value l) xs) 0 <= nth k (map (upper_value l) xs) 0.
+  forall l vals, 0 <= l -> sorted vals ->
+    forall j k, (j < k)%nat -> (k < length (map (upper_value l) vals))%nat ->
+      nth j (map (upper_value l) vals) 0 <= nth k (map (upper_value l) vals) 0.
 Proof.
-  intros l xs Hl Hs j k Hjk Hk.
+  intros l vals Hl Hs j k Hjk Hk.
   rewrite length_map in Hk.
   rewrite (nth_indep _ _ (upper_value l 0)) by (rewrite length_map; lia).
-  rewrite (nth_indep (map _ xs) 0 (upper_value l 0)) by (rewrite length_map; lia).
+  rewrite (nth_indep (map _ vals) 0 (upper_value l 0)) by (rewrite length_map; lia).
   rewrite !map_nth.
   apply upper_value_mono; [lia|].
-  apply (StronglySorted_nth Z.le xs 0 j k Hs); lia.
+  apply (StronglySorted_nth Z.le vals 0 j k Hs); lia.
 Qed.
 
 Lemma Z_to_nat_add :
@@ -482,12 +482,12 @@ Qed.
 
 (* --- nth of map helper --- *)
 Lemma nth_map_safe :
-  forall {A B : Type} (f : A -> B) (xs : list A) (i : nat) (da : A) (db : B),
-    (i < length xs)%nat ->
-    nth i (map f xs) db = f (nth i xs da).
+  forall {A B : Type} (f : A -> B) (vals : list A) (i : nat) (da : A) (db : B),
+    (i < length vals)%nat ->
+    nth i (map f vals) db = f (nth i vals da).
 Proof.
-  intros A B f xs i da db Hi.
-  revert i Hi. induction xs as [|x xs' IH]; intros.
+  intros A B f vals i da db Hi.
+  revert i Hi. induction vals as [|x vals' IH]; intros.
   - simpl in Hi. lia.
   - destruct i; simpl; [reflexivity | apply IH; simpl in Hi; lia].
 Qed.
@@ -497,29 +497,29 @@ Qed.
 (* ================================================================= *)
 
 Theorem access_ef_correct :
-  forall U xs i,
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    (i < length xs)%nat ->
-    access_ef (encode U xs) i = nth i xs 0.
+  forall U vals i,
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    (i < length vals)%nat ->
+    access_ef (encode U vals) i = nth i vals 0.
 Proof.
-  intros U xs i Hs Hnn Hb Hi.
+  intros U vals i Hs Hnn Hb Hi.
   unfold access_ef, encode. simpl.
-  set (l := num_lower_bits U (Z.of_nat (length xs))).
+  set (l := num_lower_bits U (Z.of_nat (length vals))).
   assert (Hl : 0 <= l) by apply num_lower_bits_nonneg.
-  assert (Hxi_nn : 0 <= nth i xs 0).
+  assert (Hxi_nn : 0 <= nth i vals 0).
   { unfold all_nonneg in Hnn. rewrite Forall_forall in Hnn.
     apply Hnn. apply nth_In. exact Hi. }
   rewrite position_of_ith_one_build_upper
     by (try apply Forall_map_upper_nonneg; try apply StronglySorted_map_upper_nth;
         try rewrite length_map; assumption).
-  (* Goal: (Z.of_nat (Z.to_nat (nth i (map (upper_value l) xs) 0) + i) - Z.of_nat i)
-           * 2^l + nth i (map (lower_bits l) xs) 0 = nth i xs 0 *)
-  rewrite (nth_map_safe (upper_value l) xs i 0%Z 0%Z) by exact Hi.
-  rewrite (nth_map_safe (lower_bits l) xs i 0%Z 0%Z) by exact Hi.
-  assert (Huv_nn : 0 <= upper_value l (nth i xs 0))
+  (* Goal: (Z.of_nat (Z.to_nat (nth i (map (upper_value l) vals) 0) + i) - Z.of_nat i)
+           * 2^l + nth i (map (lower_bits l) vals) 0 = nth i vals 0 *)
+  rewrite (nth_map_safe (upper_value l) vals i 0%Z 0%Z) by exact Hi.
+  rewrite (nth_map_safe (lower_bits l) vals i 0%Z 0%Z) by exact Hi.
+  assert (Huv_nn : 0 <= upper_value l (nth i vals 0))
     by (apply upper_value_nonneg; lia).
-  replace (Z.of_nat (Z.to_nat (upper_value l (nth i xs 0)) + i) - Z.of_nat i)
-    with (upper_value l (nth i xs 0)).
+  replace (Z.of_nat (Z.to_nat (upper_value l (nth i vals 0)) + i) - Z.of_nat i)
+    with (upper_value l (nth i vals 0)).
   2: { rewrite Nat2Z.inj_add, Z2Nat.id by lia. lia. }
   apply recombine; lia.
 Qed.
@@ -548,11 +548,11 @@ Proof.
 Qed.
 
 Theorem round_trip :
-  forall (U : Z) (xs : list Z),
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    decode (encode U xs) = xs.
+  forall (U : Z) (vals : list Z),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    decode (encode U vals) = vals.
 Proof.
-  intros U xs Hs Hnn Hb.
+  intros U vals Hs Hnn Hb.
   unfold decode. simpl.
   apply nth_ext with (d := 0%Z) (d' := 0%Z).
   - rewrite decode_aux_length. reflexivity.
@@ -564,10 +564,10 @@ Proof.
 Qed.
 
 Theorem access_correct :
-  forall (U : Z) (xs : list Z) (i : nat),
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    (i < length xs)%nat ->
-    access (encode U xs) i = nth i xs 0.
+  forall (U : Z) (vals : list Z) (i : nat),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    (i < length vals)%nat ->
+    access (encode U vals) i = nth i vals 0.
 Proof.
   intros. apply access_ef_correct; assumption.
 Qed.
@@ -605,14 +605,14 @@ Proof.
 Qed.
 
 Theorem nextGEQ_found_thm :
-  forall (U : Z) (xs : list Z) (v r : Z),
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    nextGEQ (encode U xs) v = Some r ->
-    In r xs /\ r >= v.
+  forall (U : Z) (vals : list Z) (v r : Z),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    nextGEQ (encode U vals) v = Some r ->
+    In r vals /\ r >= v.
 Proof.
-  intros U xs v r Hs Hnn Hb Hfind.
+  intros U vals v r Hs Hnn Hb Hfind.
   unfold nextGEQ in Hfind. simpl in Hfind.
-  pose proof (nextGEQ_aux_spec (encode U xs) v 0 (length xs)) as Hspec.
+  pose proof (nextGEQ_aux_spec (encode U vals) v 0 (length vals)) as Hspec.
   rewrite Hfind in Hspec.
   destruct Hspec as [j [Hj [Haj [Hrv _]]]].
   split.
@@ -621,38 +621,38 @@ Proof.
 Qed.
 
 Theorem nextGEQ_smallest_thm :
-  forall (U : Z) (xs : list Z) (v r : Z),
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    nextGEQ (encode U xs) v = Some r ->
-    forall y, In y xs -> y >= v -> r <= y.
+  forall (U : Z) (vals : list Z) (v r : Z),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    nextGEQ (encode U vals) v = Some r ->
+    forall y, In y vals -> y >= v -> r <= y.
 Proof.
-  intros U xs v r Hs Hnn Hb Hfind y Hy Hyv.
+  intros U vals v r Hs Hnn Hb Hfind y Hy Hyv.
   unfold nextGEQ in Hfind. simpl in Hfind.
-  pose proof (nextGEQ_aux_spec (encode U xs) v 0 (length xs)) as Hspec.
+  pose proof (nextGEQ_aux_spec (encode U vals) v 0 (length vals)) as Hspec.
   rewrite Hfind in Hspec.
   destruct Hspec as [j [Hj [Haj [Hrv Hbefore]]]].
   apply In_nth with (d := 0%Z) in Hy. destruct Hy as [k [Hk Hnth]]. subst y.
   rewrite <- Haj, access_ef_correct by (assumption || lia).
   destruct (Nat.le_gt_cases j k) as [Hjk|Hjk].
   - destruct (Nat.eq_dec j k) as [->|Hne]; [lia|].
-    apply (StronglySorted_nth Z.le xs 0%Z j k Hs); lia.
+    apply (StronglySorted_nth Z.le vals 0%Z j k Hs); lia.
   - exfalso.
-    assert (H: access_ef (encode U xs) k < v) by (apply Hbefore; lia).
+    assert (H: access_ef (encode U vals) k < v) by (apply Hbefore; lia).
     rewrite access_ef_correct in H by (assumption || lia). lia.
 Qed.
 
 Theorem nextGEQ_none_thm :
-  forall (U : Z) (xs : list Z) (v : Z),
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    nextGEQ (encode U xs) v = None ->
-    forall y, In y xs -> y < v.
+  forall (U : Z) (vals : list Z) (v : Z),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    nextGEQ (encode U vals) v = None ->
+    forall y, In y vals -> y < v.
 Proof.
-  intros U xs v Hs Hnn Hb Hnone y Hy.
+  intros U vals v Hs Hnn Hb Hnone y Hy.
   unfold nextGEQ in Hnone. simpl in Hnone.
-  pose proof (nextGEQ_aux_spec (encode U xs) v 0 (length xs)) as Hspec.
+  pose proof (nextGEQ_aux_spec (encode U vals) v 0 (length vals)) as Hspec.
   rewrite Hnone in Hspec.
   apply In_nth with (d := 0%Z) in Hy. destruct Hy as [k [Hk Hnth]]. subst y.
-  assert (H: access_ef (encode U xs) k < v) by (apply Hspec; lia).
+  assert (H: access_ef (encode U vals) k < v) by (apply Hspec; lia).
   rewrite access_ef_correct in H by (assumption || lia). lia.
 Qed.
 
@@ -661,18 +661,18 @@ Qed.
 (* ================================================================= *)
 
 Theorem space_bound :
-  forall (U : Z) (xs : list Z),
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    xs <> [] -> 0 < U ->
-    let n := Z.of_nat (length xs) in
-    bit_size (encode U xs) <= n * (2 + Z.log2 (U / n)).
+  forall (U : Z) (vals : list Z),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    vals <> [] -> 0 < U ->
+    let n := Z.of_nat (length vals) in
+    bit_size (encode U vals) <= n * (2 + Z.log2 (U / n)).
 Proof.
-  intros U xs Hs Hnn Hb Hne HU n.
+  intros U vals Hs Hnn Hb Hne HU n.
   unfold bit_size, encode, num_lower_bits. simpl ef_n. simpl ef_l.
   fold n.
   destruct (n <=? 0) eqn:Hn.
   - apply Z.leb_le in Hn. unfold n in Hn.
-    destruct xs; [contradiction|simpl in Hn; lia].
+    destruct vals; [contradiction|simpl in Hn; lia].
   - apply Z.leb_gt in Hn.
     destruct (U <=? 0) eqn:HU'.
     + apply Z.leb_le in HU'. lia.

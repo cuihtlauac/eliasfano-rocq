@@ -12,71 +12,71 @@ Open Scope Z_scope.
 
 (** ** Data: a sorted sequence of non-negative integers bounded by U *)
 
-Definition sorted (xs : list Z) : Prop := StronglySorted Z.le xs.
+Definition sorted (vals : list Z) : Prop := StronglySorted Z.le vals.
 
-Definition all_nonneg (xs : list Z) : Prop :=
-  Forall (fun x => 0 <= x) xs.
+Definition all_nonneg (vals : list Z) : Prop :=
+  Forall (fun x => 0 <= x) vals.
 
-Definition bounded_by (U : Z) (xs : list Z) : Prop :=
-  Forall (fun x => x < U) xs.
+Definition bounded_by (U : Z) (vals : list Z) : Prop :=
+  Forall (fun x => x < U) vals.
 
 (** ** The encoding is a pair: lower bits array + upper bits bitvector *)
 
 (** We leave the representation abstract at the spec level.
     The implementation will define [encoded] concretely. *)
 Parameter encoded : Type.
-Parameter encode : Z -> list Z -> encoded.  (** [encode U xs] *)
+Parameter encode : Z -> list Z -> encoded.  (** [encode U vals] *)
 Parameter decode : encoded -> list Z.
 Parameter access : encoded -> nat -> Z.
 Parameter bit_size : encoded -> Z.
 
 (** ** Core correctness: round-trip *)
 
-Axiom round_trip :
-  forall (U : Z) (xs : list Z),
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    decode (encode U xs) = xs.
+Conjecture round_trip :
+  forall (U : Z) (vals : list Z),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    decode (encode U vals) = vals.
 
 (** ** Element access *)
 
-Axiom access_correct :
-  forall (U : Z) (xs : list Z) (i : nat),
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    (i < length xs)%nat ->
-    access (encode U xs) i = nth i xs 0.
+Conjecture access_correct :
+  forall (U : Z) (vals : list Z) (i : nat),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    (i < length vals)%nat ->
+    access (encode U vals) i = nth i vals 0.
 
 (** ** Successor query: smallest element >= v *)
 
 Parameter nextGEQ : encoded -> Z -> option Z.
 
-Axiom nextGEQ_found :
-  forall (U : Z) (xs : list Z) (v r : Z),
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    nextGEQ (encode U xs) v = Some r ->
-    In r xs /\ r >= v.
+Conjecture nextGEQ_found :
+  forall (U : Z) (vals : list Z) (v r : Z),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    nextGEQ (encode U vals) v = Some r ->
+    In r vals /\ r >= v.
 
-Axiom nextGEQ_smallest :
-  forall (U : Z) (xs : list Z) (v r : Z),
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    nextGEQ (encode U xs) v = Some r ->
-    forall y, In y xs -> y >= v -> r <= y.
+Conjecture nextGEQ_smallest :
+  forall (U : Z) (vals : list Z) (v r : Z),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    nextGEQ (encode U vals) v = Some r ->
+    forall y, In y vals -> y >= v -> r <= y.
 
-Axiom nextGEQ_none :
-  forall (U : Z) (xs : list Z) (v : Z),
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    nextGEQ (encode U xs) v = None ->
-    forall y, In y xs -> y < v.
+Conjecture nextGEQ_none :
+  forall (U : Z) (vals : list Z) (v : Z),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    nextGEQ (encode U vals) v = None ->
+    forall y, In y vals -> y < v.
 
 (** ** Space bound *)
 
 (** Encoding uses at most n*(2 + log2(U/n)) bits. *)
 
-Axiom space_bound :
-  forall (U : Z) (xs : list Z),
-    sorted xs -> all_nonneg xs -> bounded_by U xs ->
-    xs <> [] -> 0 < U ->
-    let n := Z.of_nat (length xs) in
-    bit_size (encode U xs) <= n * (2 + Z.log2 (U / n)).
+Conjecture space_bound :
+  forall (U : Z) (vals : list Z),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    vals <> [] -> 0 < U ->
+    let n := Z.of_nat (length vals) in
+    bit_size (encode U vals) <= n * (2 + Z.log2 (U / n)).
 
 (** ** Rank and Select on bitvectors *)
 
@@ -98,12 +98,12 @@ Definition position_of_ith_one (bv : list bool) (i : nat) : nat :=
 Definition count_ones_up_to (bv : list bool) (pos : nat) : nat :=
   count_occ Bool.bool_dec (firstn pos bv) true.
 
-Axiom rank_select :
+Conjecture rank_select :
   forall (bv : list bool) (i : nat),
     (i < count_occ Bool.bool_dec bv true)%nat ->
     count_ones_up_to bv (position_of_ith_one bv i) = i.
 
-Axiom select_rank :
+Conjecture select_rank :
   forall (bv : list bool) (pos : nat),
     nth pos bv false = true ->
     position_of_ith_one bv (count_ones_up_to bv pos) = pos.
@@ -117,7 +117,7 @@ From Stdlib Require Import Uint63.
 
 Parameter popcount : int -> int.
 
-Axiom popcount_spec :
+Conjecture popcount_spec :
   forall (x : int),
     Z.of_nat (
       let fix count_bits (n : nat) (acc : nat) :=
