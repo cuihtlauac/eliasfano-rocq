@@ -1,3 +1,11 @@
+(library
+ (name bench_common)
+ (modules bench_common)
+ (foreign_stubs
+  (language c)
+  (names bench_timer_stubs)
+  (flags :standard -O2)))
+
 (executable
  (name gen_data)
  (modules gen_data))
@@ -5,9 +13,9 @@
 (executable
  (name bench_ocaml)
  (modules bench_ocaml)
- (libraries elias_fano))
+ (libraries elias_fano bench_common))
 
 (executable
  (name bench_extracted)
  (modules bench_extracted)
- (libraries elias_fano_int63))
+ (libraries elias_fano_int63 bench_common))
