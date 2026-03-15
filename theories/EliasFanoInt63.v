@@ -4,13 +4,14 @@
     Agreement with the Z/list proofs in [EliasFano.v] is established
     for all operations.
 
-    The only remaining axioms are [popcount_spec] (backed by a C stub)
-    and [bv_select_agrees] (popcount-based bitvector scan).
+    The only remaining axiom is [popcount_spec] (backed by a C stub).
+    [bv_select_agrees] is a proved lemma.  All decrease obligations
+    for Acc-based recursion are proved (no Admitted).
 
     [Print Assumptions] on each top-level theorem shows exactly
     which axioms remain. *)
 
-From Stdlib Require Import ZArith List Bool Uint63 PArray Lia.
+From Stdlib Require Import ZArith List Bool Uint63 PArray Lia Wf_nat.
 From coqutil Require Import Z.BitOps.
 From EliasFano Require Import EliasFano.
 
@@ -73,12 +74,91 @@ Definition bv_set (bv : array int) (pos : int) : array int :=
 (** Popcount: the only operation backed by unverified C code. *)
 Parameter popcount : int -> int.
 
-(** Clear the lowest [n] one-bits from a word. *)
+(** Clear the lowest [n] one-bits from a word (nat version, for proofs). *)
 Fixpoint clear_n_ones (word : int) (n : nat) : int :=
   match n with
   | O => word
   | S n' => clear_n_ones (word land (Uint63.sub word 1)) n'
   end.
+
+(** Decidable equality on [int] (in [Set], for clean extraction). *)
+Definition int_eq_dec (x y : int) : {x = y} + {x <> y}.
+Proof.
+  destruct (x =? y) eqn:E.
+  - left. apply eqb_correct. exact E.
+  - right. intro H. subst. rewrite eqb_refl in E. discriminate.
+Defined.
+Global Arguments int_eq_dec : simpl never.
+
+(** Clear the lowest [n] one-bits (int version, for fast extraction).
+    Uses Acc-based recursion so extraction produces a clean loop
+    instead of the closure-heavy nat dispatch pattern. *)
+Section ClearNOnesInt.
+  Let measure (n : int) : nat := Z.to_nat (to_Z n).
+
+  Lemma clear_n_decrease : forall n : int,
+    n <> 0 ->
+    (measure (Uint63.sub n 1) < measure n)%nat.
+  Proof.
+    intros n Hne. unfold measure.
+    pose proof (to_Z_bounded n) as Hb.
+    change Uint63Axioms.wB with (2 ^ 63)%Z in Hb.
+    assert (Hpos : (0 < to_Z n)%Z).
+    { destruct (Z.eq_dec (to_Z n) 0) as [Hz|Hz];
+        [exfalso; apply Hne; apply to_Z_inj; exact Hz | lia]. }
+    rewrite Uint63.sub_spec.
+    change (to_Z 1) with 1%Z.
+    change Uint63Axioms.wB with (2 ^ 63)%Z.
+    rewrite Z.mod_small; [| lia].
+    apply Z2Nat.inj_lt; lia.
+  Qed.
+
+  Fixpoint clear_n_ones_int (word n : int)
+      (ACC : Acc lt (measure n)) {struct ACC} : int :=
+    match int_eq_dec n 0 with
+    | left _ => word
+    | right Hne =>
+        clear_n_ones_int (word land (Uint63.sub word 1)) (Uint63.sub n 1)
+              (Acc_inv ACC (clear_n_decrease n Hne))
+    end.
+End ClearNOnesInt.
+
+(** [clear_n_ones_int] agrees with [clear_n_ones] on valid inputs.
+    This bridges the fast extraction path with the proof-facing nat version. *)
+Lemma clear_n_ones_int_eq : forall (word n : int),
+  (0 <= to_Z n)%Z ->
+  clear_n_ones_int word n (lt_wf _) = clear_n_ones word (Z.to_nat (to_Z n)).
+Proof.
+  enough (H : forall m word n (acc : Acc lt (to_nat n)),
+    to_nat n = m -> (0 <= to_Z n)%Z ->
+    clear_n_ones_int word n acc = clear_n_ones word m).
+  { intros. apply H; auto. }
+  induction m as [|m' IH]; intros word n acc Hm Hnn.
+  - (* m = 0, so n = 0 *)
+    assert (Hn0 : to_Z n = 0%Z).
+    { unfold to_nat in Hm. destruct (to_Z n) eqn:E; simpl in Hm; lia. }
+    assert (Heq : n = 0) by (apply to_Z_inj; exact Hn0). subst n.
+    destruct acc as [acc']. simpl.
+    destruct (int_eq_dec 0 0) as [_|Hne]; [reflexivity | exfalso; apply Hne; reflexivity].
+  - (* m = S m' *)
+    assert (Hn_pos : (0 < to_Z n)%Z).
+    { unfold to_nat in Hm. destruct (to_Z n) eqn:E; simpl in Hm; lia. }
+    destruct acc as [acc']. simpl.
+    destruct (int_eq_dec n 0) as [Heq|Hne].
+    + rewrite Heq in Hn_pos. change (to_Z 0) with 0%Z in Hn_pos. lia.
+    + apply IH.
+      * unfold to_nat in *. rewrite sub_spec.
+        pose proof (to_Z_bounded n) as Hb.
+        change (to_Z 1) with 1%Z.
+        change Uint63Axioms.wB with (2^63)%Z in *.
+        rewrite Z.mod_small by lia.
+        destruct (to_Z n) eqn:En; try lia. simpl in *.
+        destruct p; simpl in *; lia.
+      * rewrite sub_spec. pose proof (to_Z_bounded n) as Hb.
+        change (to_Z 1) with 1%Z.
+        change Uint63Axioms.wB with (2^63)%Z in *.
+        rewrite Z.mod_small by lia. lia.
+Qed.
 
 (** Select: find position of the [target]-th one bit (0-indexed). *)
 Fixpoint bv_select_aux (bv : array int) (remaining w_idx : int)
@@ -114,10 +194,14 @@ Record bv_agreement (bv : array int) (bv_list : list bool) : Prop := mk_bva {
 (* ================================================================= *)
 
 Record ef63 := mk_ef63 {
-  ef63_lower : array int;
-  ef63_upper : array int;
-  ef63_l     : int;
-  ef63_n     : int;
+  ef63_lower      : array int;
+  ef63_upper      : array int;
+  ef63_l          : int;
+  ef63_n          : int;
+  ef63_upper_bits : int;            (* total bit count in upper bv *)
+  ef63_cum_popcnt : array int;      (* cum_popcnt[w] = ones in words 0..w-1 *)
+  ef63_sel1       : array int;      (* sel1[k] = word containing (k*K)-th one *)
+  ef63_sel0       : array int;      (* sel0[k] = word containing (k*K)-th zero *)
 }.
 
 (** Fill the lower-bits array. *)
@@ -140,6 +224,54 @@ Fixpoint fill_upper (vals : list int) (l : int) (bv : array int)
       fill_upper vals' l (bv_set bv new_pos) (add new_pos 1) u
   end.
 
+Definition sampling_period : int := 512.
+
+(** Build cumulative popcount: [cum_popcnt[w] = ones in words 0..w-1]. *)
+Fixpoint build_cum_popcnt_aux (upper acc : array int) (w cum : int)
+    (fuel : nat) : array int :=
+  match fuel with
+  | O => acc
+  | S fuel' =>
+      let new_cum := add cum (popcount upper.[w]) in
+      build_cum_popcnt_aux upper (acc.[add w 1 <- new_cum]) (add w 1) new_cum fuel'
+  end.
+
+Definition build_cum_popcnt (upper : array int) : array int :=
+  build_cum_popcnt_aux upper (make (add (length upper) 1) 0) 0 0
+    (Z.to_nat (to_Z (length upper))).
+
+(** Build [sel1]: [sel1[k] = word containing the (k*K)-th one]. *)
+Fixpoint build_sel1_aux (cum_popcnt sel : array int) (w next nw n_sel : int)
+    (fuel : nat) : array int :=
+  match fuel with
+  | O => sel
+  | S fuel' =>
+      if orb (negb (ltb w nw)) (negb (ltb next n_sel)) then sel
+      else if ltb (mul next sampling_period) (cum_popcnt.[add w 1]) then
+        build_sel1_aux cum_popcnt (sel.[next <- w]) w (add next 1) nw n_sel fuel'
+      else
+        build_sel1_aux cum_popcnt sel (add w 1) next nw n_sel fuel'
+  end.
+
+(** Build [sel0]: [sel0[k] = word containing the (k*K)-th zero]. *)
+Fixpoint build_sel0_aux (cum_popcnt sel : array int) (w next nw n_sel upper_bits : int)
+    (fuel : nat) : array int :=
+  match fuel with
+  | O => sel
+  | S fuel' =>
+      if orb (negb (ltb w nw)) (negb (ltb next n_sel)) then sel
+      else
+        let cum_zeros :=
+          if eqb (add w 1) nw then
+            sub upper_bits (cum_popcnt.[add w 1])
+          else
+            sub (mul (add w 1) wbits) (cum_popcnt.[add w 1]) in
+        if ltb (mul next sampling_period) cum_zeros then
+          build_sel0_aux cum_popcnt (sel.[next <- w]) w (add next 1) nw n_sel upper_bits fuel'
+        else
+          build_sel0_aux cum_popcnt sel (add w 1) next nw n_sel upper_bits fuel'
+  end.
+
 Definition encode63 (U : int) (vals : list int) : ef63 :=
   let n_nat := List.length vals in
   let n := of_Z (Z.of_nat n_nat) in
@@ -153,7 +285,20 @@ Definition encode63 (U : int) (vals : list int) : ef63 :=
     end in
   let upper_words := add (div (add n max_upper) wbits) 1 in
   let upper := fill_upper vals l (make upper_words 0) 0 0 in
-  mk_ef63 lower upper l n.
+  let upper_bits := add (add n max_upper) 1 in
+  let cum_popcnt := build_cum_popcnt upper in
+  let nw := length upper in
+  let total_ones := cum_popcnt.[nw] in
+  let total_zeros := sub upper_bits total_ones in
+  let n_sel1 := div (add total_ones (sub sampling_period 1)) sampling_period in
+  let n_sel0 := div (add total_zeros (sub sampling_period 1)) sampling_period in
+  let sel1_size := if eqb n_sel1 0 then 1 else n_sel1 in
+  let sel0_size := if eqb n_sel0 0 then 1 else n_sel0 in
+  let sel1 := build_sel1_aux cum_popcnt (make sel1_size 0) 0 0 nw n_sel1
+    (Z.to_nat (to_Z (add nw n_sel1))) in
+  let sel0 := build_sel0_aux cum_popcnt (make sel0_size 0) 0 0 nw n_sel0 upper_bits
+    (Z.to_nat (to_Z (add nw n_sel0))) in
+  mk_ef63 lower upper l n upper_bits cum_popcnt sel1 sel0.
 
 (* ================================================================= *)
 (* Part 4: Access, Decode, NextGEQ                                     *)
@@ -187,6 +332,273 @@ Definition nextGEQ63 (enc : ef63) (v : int) : option int :=
 
 Definition bit_size63 (enc : ef63) : int :=
   mul (ef63_n enc) (add (ef63_l enc) 2).
+
+(* ================================================================= *)
+(* Part 4b: Fast operations using sampling indices                     *)
+(*                                                                     *)
+(* Following Leroy, "Well-founded recursion done right" (CoqPL 2024,  *)
+(* https://xavierleroy.org/publi/wf-recursion.pdf):                   *)
+(* recursive functions are defined by structural induction on [Acc]    *)
+(* (accessibility) proofs. Since [Acc] has sort [Prop], extraction     *)
+(* erases it entirely, producing clean OCaml code — no [nat] fuel,    *)
+(* no [sigT] tuple packing, no closure dispatch.                       *)
+(*                                                                     *)
+(* Non-changing arguments live in [Section] variables so they become   *)
+(* curried OCaml parameters (not packed into tuples).                  *)
+(*                                                                     *)
+(* Decrease obligations are proved with appropriate preconditions.     *)
+(* They ensure totality of the extracted functions on valid inputs.    *)
+(* Fixpoints that scan arrays include bounds checks (returning 0 for  *)
+(* out-of-bounds, dead code on valid inputs) to supply the proofs.    *)
+(*                                                                     *)
+(* See also:                                                           *)
+(*   Letouzey, "Extraction in Coq: an Overview", CiE 2008            *)
+(*   Monniaux & Boulme, "The CompCert Verified Compiler TCB", ESOP 22 *)
+(*   Forster, Sozeau, Tabareau, "Verified Extraction", PLDI 2024      *)
+(* ================================================================= *)
+
+(** ** Select with sampling (O(1) via [sel1]) *)
+
+Section BvSelectFast.
+  Variable bv : array int.
+
+  Let measure (w_idx : int) : nat :=
+    (Z.to_nat (to_Z (length bv)) - Z.to_nat (to_Z w_idx))%nat.
+
+  Lemma bv_sel_decrease : forall w_idx : int,
+    (to_Z w_idx < to_Z (length bv))%Z ->
+    (measure (add w_idx 1) < measure w_idx)%nat.
+  Proof.
+    intros w_idx Hw. unfold measure.
+    pose proof (to_Z_bounded w_idx) as Hb.
+    pose proof (to_Z_bounded (length bv)) as Hlen.
+    change Uint63Axioms.wB with (2^63)%Z in *.
+    assert (Hadd : to_Z (add w_idx 1) = (to_Z w_idx + 1)%Z).
+    { rewrite add_spec. change (to_Z 1) with 1%Z.
+      change Uint63Axioms.wB with (2^63)%Z.
+      rewrite Z.mod_small; [lia | lia]. }
+    rewrite Hadd.
+    rewrite Z2Nat.inj_add by lia. change (Z.to_nat 1) with 1%nat. lia.
+  Qed.
+
+  Fixpoint bv_select_aux_wf (remaining w_idx : int)
+      (ACC : Acc lt (measure w_idx)) {struct ACC} : int :=
+    match ltb w_idx (length bv) as b
+      return (ltb w_idx (length bv) = b -> int) with
+    | false => fun _ => 0
+    | true => fun Hlt =>
+        let word := bv.[w_idx] in
+        let pc := popcount word in
+        if ltb remaining pc then
+          add (mul w_idx wbits)
+              (tail0 (clear_n_ones_int word remaining (lt_wf _)))
+        else
+          bv_select_aux_wf (sub remaining pc) (add w_idx 1)
+            (Acc_inv ACC (bv_sel_decrease w_idx
+               (proj1 (ltb_spec _ _) Hlt)))
+    end eq_refl.
+End BvSelectFast.
+
+Definition bv_select_fast (enc : ef63) (target : int) : int :=
+  let start := (ef63_sel1 enc).[target / sampling_period] in
+  let remaining := sub target (ef63_cum_popcnt enc).[start] in
+  bv_select_aux_wf (ef63_upper enc) remaining start (lt_wf _).
+
+(** O(1) access using fast select. *)
+Definition access63_fast (enc : ef63) (i : int) : int :=
+  let pos := bv_select_fast enc i in
+  let upper_val := sub pos i in
+  (upper_val << ef63_l enc) lor ((ef63_lower enc).[i]).
+
+(** ** Linear-scan decode (O(n)) *)
+
+Section DecodeScan.
+  Variable enc : ef63.
+
+  Let measure (elem_idx w_idx : int) : nat :=
+    (Z.to_nat (to_Z (ef63_n enc) - to_Z elem_idx) +
+     Z.to_nat (to_Z (length (ef63_upper enc)) - to_Z w_idx))%nat.
+
+  Lemma decode_decrease_w : forall elem_idx w_idx : int,
+    to_Z elem_idx < to_Z (ef63_n enc) ->
+    to_Z w_idx < to_Z (length (ef63_upper enc)) ->
+    (measure elem_idx (add w_idx 1) < measure elem_idx w_idx)%nat.
+  Proof.
+    intros elem_idx w_idx Hi Hw. unfold measure.
+    pose proof (to_Z_bounded w_idx) as Hbw.
+    pose proof (to_Z_bounded (length (ef63_upper enc))) as Hlen.
+    change Uint63Axioms.wB with (2^63)%Z in *.
+    assert (Hadd : to_Z (add w_idx 1) = (to_Z w_idx + 1)%Z).
+    { rewrite add_spec. change (to_Z 1) with 1%Z.
+      change Uint63Axioms.wB with (2^63)%Z.
+      rewrite Z.mod_small; [lia | lia]. }
+    rewrite Hadd.
+    enough (Z.to_nat (to_Z (length (ef63_upper enc)) - (to_Z w_idx + 1)) <
+            Z.to_nat (to_Z (length (ef63_upper enc)) - to_Z w_idx))%nat by lia.
+    apply Z2Nat.inj_lt; lia.
+  Qed.
+
+  Lemma decode_decrease_e : forall elem_idx w_idx : int,
+    to_Z elem_idx < to_Z (ef63_n enc) ->
+    (measure (add elem_idx 1) w_idx < measure elem_idx w_idx)%nat.
+  Proof.
+    intros elem_idx w_idx Hi. unfold measure.
+    pose proof (to_Z_bounded elem_idx) as He.
+    pose proof (to_Z_bounded (ef63_n enc)) as Hn.
+    change Uint63Axioms.wB with (2^63)%Z in *.
+    assert (Hadd : to_Z (add elem_idx 1) = (to_Z elem_idx + 1)%Z).
+    { rewrite add_spec. change (to_Z 1) with 1%Z.
+      change Uint63Axioms.wB with (2^63)%Z.
+      rewrite Z.mod_small; [lia | lia]. }
+    rewrite Hadd.
+    enough (Z.to_nat (to_Z (ef63_n enc) - (to_Z elem_idx + 1)) <
+            Z.to_nat (to_Z (ef63_n enc) - to_Z elem_idx))%nat by lia.
+    apply Z2Nat.inj_lt; lia.
+  Qed.
+
+  Fixpoint decode63_scan (w_idx bits elem_idx : int) (result : array int)
+      (ACC : Acc lt (measure elem_idx w_idx)) {struct ACC} : array int :=
+    match ltb elem_idx (ef63_n enc) as b
+      return (ltb elem_idx (ef63_n enc) = b -> array int) with
+    | false => fun _ => result
+    | true => fun Hlt =>
+        if eqb bits 0 then
+          match ltb w_idx (length (ef63_upper enc)) as bw
+            return (ltb w_idx (length (ef63_upper enc)) = bw -> array int) with
+          | false => fun _ => result
+          | true => fun Hwlt =>
+              let next_w := add w_idx 1 in
+              decode63_scan next_w ((ef63_upper enc).[next_w]) elem_idx result
+                (Acc_inv ACC (decode_decrease_w elem_idx w_idx
+                   (proj1 (ltb_spec _ _) Hlt)
+                   (proj1 (ltb_spec _ _) Hwlt)))
+          end eq_refl
+        else
+          let bit_pos := tail0 bits in
+          let pos := add (mul w_idx wbits) bit_pos in
+          let upper_val := sub pos elem_idx in
+          let v := (upper_val << ef63_l enc) lor ((ef63_lower enc).[elem_idx]) in
+          decode63_scan w_idx (bits land (sub bits 1)) (add elem_idx 1)
+            (result.[elem_idx <- v])
+            (Acc_inv ACC (decode_decrease_e elem_idx w_idx
+               (proj1 (ltb_spec _ _) Hlt)))
+    end eq_refl.
+End DecodeScan.
+
+Definition decode63_fast (enc : ef63) : array int :=
+  let n := ef63_n enc in
+  if eqb n 0 then make 0 0
+  else
+    decode63_scan enc 0 ((ef63_upper enc).[0]) 0 (make n 0) (lt_wf _).
+
+(** ** Select-zero with sampling (O(1) via [sel0]) *)
+
+Section BvSelectZero.
+  Variable upper : array int.
+  Variable upper_bits : int.
+
+  Let measure (w_idx : int) : nat :=
+    (Z.to_nat (to_Z (length upper)) - Z.to_nat (to_Z w_idx))%nat.
+
+  Lemma bv_sel0_decrease : forall w_idx : int,
+    (to_Z w_idx < to_Z (length upper))%Z ->
+    (measure (add w_idx 1) < measure w_idx)%nat.
+  Proof.
+    intros w_idx Hw. unfold measure.
+    pose proof (to_Z_bounded w_idx) as Hb.
+    pose proof (to_Z_bounded (length upper)) as Hlen.
+    change Uint63Axioms.wB with (2^63)%Z in *.
+    assert (Hadd : to_Z (add w_idx 1) = (to_Z w_idx + 1)%Z).
+    { rewrite add_spec. change (to_Z 1) with 1%Z.
+      change Uint63Axioms.wB with (2^63)%Z.
+      rewrite Z.mod_small; [lia | lia]. }
+    rewrite Hadd.
+    rewrite Z2Nat.inj_add by lia. change (Z.to_nat 1) with 1%nat. lia.
+  Qed.
+
+  Fixpoint bv_select_zero_aux (remaining w_idx : int)
+      (ACC : Acc lt (measure w_idx)) {struct ACC} : int :=
+    match ltb w_idx (length upper) as b
+      return (ltb w_idx (length upper) = b -> int) with
+    | false => fun _ => 0
+    | true => fun Hlt =>
+        let nw := length upper in
+        let effective :=
+          if ltb (add w_idx 1) nw then wbits
+          else let r := upper_bits mod wbits in
+               if eqb r 0 then wbits else r in
+        let zeros := sub effective (popcount upper.[w_idx]) in
+        if ltb remaining zeros then
+          let mask := if eqb effective wbits then max_int
+                      else sub (1 << effective) 1 in
+          let inverted := (Uint63.lxor upper.[w_idx] max_int) land mask in
+          add (mul w_idx wbits)
+              (tail0 (clear_n_ones_int inverted remaining (lt_wf _)))
+        else
+          bv_select_zero_aux (sub remaining zeros) (add w_idx 1)
+            (Acc_inv ACC (bv_sel0_decrease w_idx
+               (proj1 (ltb_spec _ _) Hlt)))
+    end eq_refl.
+End BvSelectZero.
+
+Definition bv_select_zero (enc : ef63) (target : int) : int :=
+  let start := (ef63_sel0 enc).[target / sampling_period] in
+  let cum_zeros := sub (mul start wbits) ((ef63_cum_popcnt enc).[start]) in
+  let remaining := sub target cum_zeros in
+  bv_select_zero_aux (ef63_upper enc) (ef63_upper_bits enc) remaining start
+    (lt_wf _).
+
+(** ** NextGEQ with select-zero jump (O(1)) *)
+
+Section NextGEQFast.
+  Variable enc : ef63.
+  Variable v : int.
+
+  Let measure (i : int) : nat :=
+    (Z.to_nat (to_Z (ef63_n enc)) - Z.to_nat (to_Z i))%nat.
+
+  Lemma next_geq_decrease : forall i : int,
+    to_Z i < to_Z (ef63_n enc) ->
+    (measure (add i 1) < measure i)%nat.
+  Proof.
+    intros i Hi. unfold measure.
+    pose proof (to_Z_bounded i) as Hb.
+    pose proof (to_Z_bounded (ef63_n enc)) as Hn.
+    assert (Hadd : to_Z (add i 1) = (to_Z i + 1)%Z).
+    { rewrite add_spec. change (to_Z 1) with 1%Z.
+      change Uint63Axioms.wB with (2^63)%Z in *.
+      rewrite Z.mod_small; [lia | lia]. }
+    rewrite Hadd. lia.
+  Qed.
+
+  Fixpoint nextGEQ63_fast_aux (i : int)
+      (ACC : Acc lt (measure i)) {struct ACC} : option int :=
+    match ltb i (ef63_n enc) as b
+      return (ltb i (ef63_n enc) = b -> option int) with
+    | false => fun _ => None
+    | true => fun Hlt =>
+        let x := access63_fast enc i in
+        if leb v x then Some x
+        else nextGEQ63_fast_aux (add i 1)
+          (Acc_inv ACC (next_geq_decrease i
+             (proj1 (ltb_spec _ _) Hlt)))
+    end eq_refl.
+End NextGEQFast.
+
+Definition nextGEQ63_fast (enc : ef63) (v : int) : option int :=
+  let n := ef63_n enc in
+  if eqb n 0 then None
+  else
+    let uv := v >> ef63_l enc in
+    let max_upper_val := sub (ef63_upper_bits enc) n in
+    if ltb max_upper_val uv then None
+    else
+      let start_idx :=
+        if eqb uv 0 then 0
+        else
+          let zero_pos := bv_select_zero enc (sub uv 1) in
+          sub (add zero_pos 1) uv in
+      nextGEQ63_fast_aux enc v start_idx (lt_wf _).
 
 (** Refinement predicate: an [ef63] faithfully represents an [ef_encoded]. *)
 Record valid_encoding (enc63 : ef63) (encZ : ef_encoded) : Prop := mk_ve {
@@ -1043,7 +1455,7 @@ Proof.
 Qed.
 
 (** Z-level: [Z.land x (x-1)] clears the lowest set bit. *)
-Lemma land_pred_clearbit : forall x k,
+Lemma kernighan_clearbit : forall x k,
   (0 < x)%Z -> (0 <= k)%Z ->
   Z.testbit x k = true ->
   (forall j, (0 <= j < k)%Z -> Z.testbit x j = false) ->
@@ -1184,9 +1596,9 @@ Proof.
   rewrite Z_count_bits_eq. lia.
 Qed.
 
-(** Lift [land_pred_clearbit] to Int63: [x land (x-1)] at Int63 level
+(** Lift [kernighan_clearbit] to Int63: [x land (x-1)] at Int63 level
     clears the lowest set bit, provided no overflow. *)
-Lemma land_sub1_clears_lowest_bit : forall (x : int),
+Lemma kernighan_clears_lowest_bit63 : forall (x : int),
   (0 < to_Z x)%Z ->
   to_Z (x land (x - 1)) = Z.land (to_Z x) (to_Z x - 1).
 Proof.
@@ -1264,8 +1676,8 @@ Proof.
     set (t := to_Z (tail0 word)) in *.
     assert (Ht_nn : (0 <= t)%Z) by (pose proof (to_Z_bounded (tail0 word)); lia).
     assert (Hword'Z : to_Z word' = Z.clearbit (to_Z word) t).
-    { unfold word'. rewrite land_sub1_clears_lowest_bit by exact Hpos.
-      apply land_pred_clearbit; assumption. }
+    { unfold word'. rewrite kernighan_clears_lowest_bit63 by exact Hpos.
+      apply kernighan_clearbit; assumption. }
     assert (Ht_lt63 : (Z.to_nat t < 63)%nat).
     { enough (t < 63)%Z by lia.
       destruct (Z_lt_dec t 63) as [|Hge]; [assumption|exfalso].
@@ -1319,8 +1731,8 @@ Proof.
     set (t0 := to_Z (tail0 word)) in *.
     assert (Ht0_nn : (0 <= t0)%Z) by (pose proof (to_Z_bounded (tail0 word)); lia).
     assert (Hw1Z : to_Z word1 = Z.clearbit (to_Z word) t0).
-    { unfold word1. rewrite land_sub1_clears_lowest_bit by exact Hpos.
-      apply land_pred_clearbit; assumption. }
+    { unfold word1. rewrite kernighan_clears_lowest_bit63 by exact Hpos.
+      apply kernighan_clearbit; assumption. }
     assert (Ht0_lt63 : (Z.to_nat t0 < 63)%nat).
     { enough (t0 < 63)%Z by lia.
       destruct (Z_lt_dec t0 63) as [|Hge]; [assumption|exfalso].
@@ -3030,8 +3442,8 @@ Qed.
 (* ================================================================= *)
 
 (* Audit: which axioms remain?
-   Only popcount_spec (C-backed) and bv_select_agrees (popcount-based
-   scan) plus Uint63/PArray primitives. *)
+   Only popcount_spec (C-backed) plus Uint63/PArray primitives.
+   bv_select_agrees is a proved lemma (not an axiom). *)
 Print Assumptions access63_correct.
 Print Assumptions decode63_agrees.
 Print Assumptions nextGEQ63_found.

@@ -6,12 +6,12 @@
 (** Opaque encoded representation. *)
 type t
 
-(** [encode ~universe xs] encodes a sorted list of non-negative integers
+(** [encode ~universe xs] encodes a sorted array of non-negative integers
     all strictly less than [universe]. *)
-val encode : universe:int -> int list -> t
+val encode : universe:int -> int array -> t
 
-(** [decode t] recovers the original sorted list. *)
-val decode : t -> int list
+(** [decode t] recovers the original sorted array. *)
+val decode : t -> int array
 
 (** [access t i] returns the [i]-th element (0-indexed). *)
 val access : t -> int -> int

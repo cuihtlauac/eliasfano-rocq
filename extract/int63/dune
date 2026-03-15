@@ -1,24 +1,17 @@
+; Rocq extraction produces EliasFanoInt63.ml directly.
+; PArray → Ef_parray binding is done in ExtractInt63.v via Extract Constant
+; (no sed post-processing needed; coq/coq#13575 workaround also in .v file).
 (rocq.extraction
  (prelude ExtractInt63)
- (extracted_modules EliasFanoInt63Ocaml)
+ (extracted_modules EliasFanoInt63)
  (theories EliasFano Stdlib coqutil))
-
-; Rocq extraction generates "'a Parray.t" with a spurious type variable.
-; These rules sed-fix the generated files before compilation.
-(rule
- (targets EliasFanoInt63.ml)
- (deps EliasFanoInt63Ocaml.ml)
- (action (with-stdout-to %{targets}
-  (bash "sed \"s/ 'a Parray\\.t/ Parray.t/g\" %{deps}"))))
-
-(rule
- (targets EliasFanoInt63.mli)
- (deps EliasFanoInt63Ocaml.mli)
- (action (with-stdout-to %{targets}
-  (bash "sed \"s/ 'a Parray\\.t/ Parray.t/g\" %{deps}"))))
 
 (library
  (name elias_fano_int63)
  (wrapped false)
- (modules EliasFanoInt63 ef_popcount)
- (libraries elias_fano rocq-runtime.kernel))
+ (modules EliasFanoInt63 ef_popcount ef_parray ef_uint63_fast)
+ (libraries elias_fano rocq-runtime.kernel)
+ (foreign_stubs
+  (language c)
+  (names uint63_stubs)
+  (flags :standard -O2 -march=native)))
