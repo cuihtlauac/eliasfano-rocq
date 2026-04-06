@@ -10,18 +10,23 @@ Cuihtlauac Alvarado — Tarides
 
 DevFestNoz, Lannion — 2026-03-12
 
-<!-- end_slide -->
-
-# Off-Topic
-
-AI environmental, ethical, political and social concerns. I share them
+Tarides Tech Talk — 2026-04-07
 
 <!-- end_slide -->
 
-# Productivity Explosion
+# Off-Topic?
+
+AI environmental, ethical, political and social concerns.
+  - I share them
+  - Not a _fan-boy_ — As hyped, vibe-coding is gross negligence
+  - **But** the technology is there
+
+<!-- end_slide -->
+
+# Productivity Explosion?
 
 - LLMs write code 10× to 100× faster than humans
-- GitHub Copilot: 55% faster task completion (Peng et al., 2023)
+- Not an unquestionable fact, but an unstoppable hype claim
 - 16 Claude agents wrote a C compiler that builds Linux
 - Code review still at about 150 LOC/hour (Cisco/SmartBear study)
 - Everyone is a 10× developer now. Nobody is a 10× reviewer
@@ -34,15 +39,11 @@ AI environmental, ethical, political and social concerns. I share them
 - “Testing shows the presence, not the absence of bugs” — Dijkstra
 - *Silent hallucinations*: code looks correct, subtly wrong
 - *Garbage-In Garbage-Out*: inconsistencies in the context derail the agent
-- No choice but to trust
-
-<!-- end_slide -->
-
-# Some Responses
-
-- **More reviewers** but that does not scale
-- **Better tests** but they only cover partial state space
-- LLM-written tests tend to agree with LLM-written code
+- Lame Responses
+  - **More reviewers** but that does not scale
+  - **Better tests** but they only cover partial state space
+  - LLM-written tests tend to agree with LLM-written code
+  - No choice but to trust
 - **Machine-checked proofs**, the topic of this talk
 - Shift trust from “someone read it” to “math checked it”
 
@@ -142,7 +143,7 @@ Encoded:  `0111`  `0110101`     (11 bits)
 
 - Common thread: enormous effort, PhD-level expertise
 - 10× to 30× cost ratio versus unverified code
-- Economics and velocity killed adoption
+- Economics and velocity kills it
 
 <!-- end_slide -->
 
@@ -183,37 +184,37 @@ The *trusted computing base*: know exactly who is responsible for what.
 
 <!-- end_slide -->
 
-# Three Numeric Worlds
+# Two Numeric Worlds
 
-<!-- column_layout: [1, 1, 1] -->
+<!-- column_layout: [1, 1] -->
 
 <!-- column: 0 -->
 
-### ℤ (specification)
+### Specification: ℕ and ℤ
 
-- Unbounded integers
-- Proof automation
-- Clean math
+- Unbounded - No overflow
+- Naturals
+  - Peano (OCaml: `unit list`)
+  - List positions
+  - Structural recursion
+- Integers
+  - Ocaml: `bool * bool list`
+  - Proof automation
+  - Clean math
 
 <!-- column: 1 -->
 
-### ℕ (indices)
+### Implementation: `Int63` and `PArray`
 
-- List positions
-- Structural recursion
-- No overflow
-
-<!-- column: 2 -->
-
-### `Int63` (implementation)
-
-- Machine words
+- Bounded
+- OCaml words
 - Overflow proofs
 - Fast extraction
+- `PArray`: immutable array and list of changes
 
 <!-- reset_layout -->
 
-- Algorithmic correctness lives in ℤ: clean math, no overflow
+- Algorithmic correctness lives in ℤ
 - But ℤ arithmetic is impractical at runtime
 - `Int63` gives native performance, but can overflow and wrap
 - Bridging lemmas connect both: prove they agree when values fit
