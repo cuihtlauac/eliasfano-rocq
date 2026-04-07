@@ -30,6 +30,8 @@ AI environmental, ethical, political and social concerns.
 - 16 Claude agents wrote a C compiler that builds Linux
 - Code review still at about 150 LOC/hour (Cisco/SmartBear study)
 - Everyone is a 10× developer now. Nobody is a 10× reviewer
+  - Review isn't a matter of productivity
+  - It's a matter of trust and responsibility
 
 <!-- end_slide -->
 
@@ -150,17 +152,18 @@ Encoded:  `0111` `0 110 10 1`   (11 bits)
 
 <!-- end_slide -->
 
-# Finding *vs* Checking
+# Writing Terms *vs* Type-Checking
 
-- Rocq is a proof **checker**, not a proof finder
+- Rocq is a type checker for a type system so expressive that (almost) all maths fits in
+- A proof is a well-typed term; verification is type-checking
 - Writing proofs is hard, checking them is mechanical
 - Think `ocamlc -i` _vs_ writing `.mli` by hand — checking is cheap, finding is expensive
 
 <!-- pause -->
 
-- Claude finds the proofs, about 4,200 lines (I steer the strategy)
-- Rocq kernel checks every lemma, rejects anything wrong
-- **How** the proof was written is irrelevant, only that it passes the checker
+- Claude writes the terms, about 4,200 lines (I steer the strategy)
+- Rocq type-checks every lemma, rejects anything wrong
+- **How** the term was written is irrelevant, only that it type-checks
 - Language matters: OCaml, Rust or C are easier to verify than Python or JavaScript
 
 <!-- end_slide -->
@@ -180,8 +183,10 @@ The *trusted computing base*: know exactly who is responsible for what.
 
 - Specification defines **what** is correct
 - Proof shows **why** it is correct
-- Rocq *extraction* translates proven code into OCaml automatically
 - Code implements **how** it runs
+- This is *verified programming*, not *extraction* in the Paulin-Mohring sense
+  - Functions translated from Rocq to OCaml, not synthesised from existence proofs
+  - Think of it as FP purer than Haskell — not even IO
 - Human reviews **143 lines** total. Rest is machine-checked.
 - TCB boundary: Rocq kernel & runtime, OCaml compiler and `Stdlib`, OS, HW
 - Same things you already trust for any OCaml program
@@ -191,37 +196,22 @@ The *trusted computing base*: know exactly who is responsible for what.
 
 # What Is Proved
 
-<!-- column_layout: [1, 1] -->
+### Correctness (ℤ level) — 8 theorems
 
-<!-- column: 0 -->
+- **Structural**
+  - `round_trip` — decode(encode(vals)) = vals
+  - `rank_select`, `select_rank` — rank and select are inverses on set-bit positions
+- **Functional** (ℤ and Int63)
+  - `access_correct` — access(i) returns the i-th value (ℤ only)
+  - `nextGEQ_found` — nextGEQ(v) returns a value ≥ v
+  - `nextGEQ_smallest` — …and it is the smallest such value
+  - `nextGEQ_none` — if no value ≥ v exists, returns None
+- **Efficiency**
+  - `space_bound` — encoding uses at most n·(2 + log₂(U/n)) bits
+- **Agreement** — `Int63` gives the same results as ℤ when values fit in 63 bits
+  - `access63_agrees`, `decode63_agrees`
 
-### Correctness (ℤ level)
-
-| Property | Status |
-|----------|--------|
-| round_trip | Proved |
-| access_correct | Proved |
-| nextGEQ_found | Proved |
-| nextGEQ_smallest | Proved |
-| nextGEQ_none | Proved |
-| space_bound | Proved |
-| rank_select | Proved |
-| select_rank | Proved |
-| popcount_spec | Axiom (C shim) |
-
-<!-- column: 1 -->
-
-### Agreement (Int63 level)
-
-| Property | Status |
-|----------|--------|
-| access63_agrees | Proved |
-| decode63_agrees | Proved |
-| nextGEQ63_found | Proved |
-| nextGEQ63_smallest | Proved |
-| nextGEQ63_none | Proved |
-
-<!-- reset_layout -->
+<!-- pause -->
 
 Only axiom: `popcount_spec` — backed by 3-line C shim using `__builtin_popcountl`
 
@@ -470,9 +460,9 @@ Times are versus Sux (Vigna's C++ library, n = 100M)
 <!-- pause -->
 
 5. Expansion of the specification to `Int63` and `PArray`
-6. LLM proof search, Rocq verification — I had to help here
+6. LLM proof search, Rocq verification — I had to help, Claude stucked
 7. Extraction and benchmarking: 3× to 23× slower than Sux
-8. Proof refactoring — I had to steer, it could not guess
+8. Proof refactoring — I had to steer, Claude clueless
 9. Implementation and verification of Vigna's hacks, automatic again
 10. Extraction and benchmarking: 1.15× to 4.4× slower than Sux
 
@@ -480,7 +470,13 @@ Times are versus Sux (Vigna's C++ library, n = 100M)
 
 Honest truth:
 - I had to use my PhD experience in Rocq
-- LLM agent could not overcome Rocq performance pathologies, yet
+- Difficulties Claude could not overcome, yet
+  - Rocq performance pathologies on giant proof terms
+  - Theory engineering combining extracted performance and provability
+- Where Claude shines:
+  - Using the tactic language
+  - Adding lemmas on the fly
+  - Generalizing statements
 
 <!-- end_slide -->
 

@@ -72,7 +72,7 @@ Use `./build.sh` (wrapper around `opam exec -- dune build`).
 | `bench/bench_ocaml.ml` | OCaml benchmark with oracle checks |
 | `benchmarks/` | Docker-based benchmark suite (A and B) |
 | `benchmarks/harness/run.sh` | Agent-agnostic benchmark orchestrator |
-| `slides/talk.md` | "Proofs as Reviews" presentation |
+| `slides/proofs_as_reviews.md` | "Proofs as Reviews" presentation |
 
 ## Permissions
 
