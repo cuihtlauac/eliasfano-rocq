@@ -19,7 +19,7 @@ Tarides Tech Talk — 2026-04-07
 AI environmental, ethical, political and social concerns.
   - I share them
   - Not a _fan-boy_ — As hyped, vibe-coding is gross negligence
-  - **But** the technology is there
+  -  — But — the technology is there
 
 <!-- end_slide -->
 
@@ -38,7 +38,11 @@ AI environmental, ethical, political and social concerns.
 - Code compiles, passes tests, but nobody read it
 - “Testing shows the presence, not the absence of bugs” — Dijkstra
 - *Silent hallucinations*: code looks correct, subtly wrong
-- *Garbage-In Garbage-Out*: inconsistencies in the context derail the agent
+- *Garbage-In Garbage-Out*:
+  - Context inconsistencies and shortcomings
+  - Sycophancy or deference-biased engineering
+  - Anthropomorphism
+  - Output: subpar to wholly unacceptable
 - Lame Responses
   - **More reviewers** but that does not scale
   - **Better tests** but they only cover partial state space
@@ -60,7 +64,7 @@ AI environmental, ethical, political and social concerns.
 - *n* integers in universe [0, *U*)
 - Naive storage: *n* × log₂(*U*) bits
 - Elias-Fano: *n* × (2 + log₂(*U*/*n*)) bits, **near-optimal**
-- Compact enough to fit in cache, faster than uncompressed data in RAM
+- Pack more data in cache
 
 <!-- end_slide -->
 
@@ -68,7 +72,7 @@ AI environmental, ethical, political and social concerns.
 
 - Split each value *x* into **upper** and **lower** bits
 - Lower ℓ = ⌊log₂(*U*/*n*)⌋ bits, stored concatenated
-- Upper bits: **unary** coding with 0-terminators
+- Upper bits: **unary** coding with 0-separators
 
 <!-- pause -->
 
@@ -83,24 +87,23 @@ upper bits: [0, 1, 1, 0, 1, 0, 1]
                 1  1     2     3    (position - rank = upper prefix)
 ```
 
-Value upper prefix count, in unary:
-- Prefix `00` appears 0 times
-- Prefix `01` appears 2 times (values 2 and 3)
-- Prefix `10` appears 1 time (value 5)
-- Prefix `11` appears 1 time (value 7)
+Value upper prefix count, in _unary_:
+- Prefix `00` appears 0   (`0`) times
+- Prefix `01` appears 2 (`110`) times (values 2 and 3)
+- Prefix `10` appears 1  (`10`) time (value 5)
+- Prefix `11` appears 1  (`10`) time (value 7)
 
 Plain:    `010 011 101 111`   (12 bits)
 
-Encoded:  `0111`  `0110101`     (11 bits)
-
+Encoded:  `0111` `0 110 10 1`   (11 bits)
 <!-- end_slide -->
 
 # Operations
 
-- **encode**(*vals*, *U*) builds the two bitvectors
-- **access**(*i*) selects *i*-th one in upper bits, runs in O(1)
-- **nextGEQ**(*v*) finds first value ≥ *v*, O(1) with rank tables
-- **decode** iterates access over all elements
+- `encode(vals, U)` builds the two bitvectors
+- `access(i)` selects *i*-th `1` in upper bits, runs in O(1)
+- `nextGEQ(v)` finds first value ≥ *v*, O(1) with rank tables
+- `decode` iterates access over all elements
 - Key primitive: `select(bv, i)` returns position of *i*-th set bit
 - My implementation uses popcount-based scan over 63-bit words
 - Vigna's Sux code is heavily optimized, full of broadword tricks and bit hacks
@@ -125,7 +128,7 @@ Encoded:  `0111`  `0110101`     (11 bits)
 - Mathematical **assurance** that code meets specification
 - Not **testing harder**, a different kind of trust
 - Specification says “decode Elias-Fano encoding, get back original list”
-- Proof shows for **all** sorted inputs, decode(encode(*vals*)) = *vals*
+- Proof shows for **all** sorted inputs, `decode(encode(vals)) = vals`
 - Bit manipulation, overflow, select: every corner case covered
 
 <!-- end_slide -->
@@ -137,13 +140,13 @@ Encoded:  `0111`  `0110101`     (11 bits)
 | A380 (Airbus, 2004) | Flight control | undisclosed | ~132k | Astrée |
 | CompCert (Leroy, 2006) | C compiler | 6 | ~100k | Coq |
 | seL4 (Klein, 2009) | OS Microkernel | 20 | ~10k | Isabelle |
-| EverCrypt (Microsoft, 2019) | Crypto library | 3 | ~107k | F* |
+| EverParse (Microsoft, 2019) | Binary parsers | 3 | ~50k | F* |
 
 <!-- pause -->
 
 - Common thread: enormous effort, PhD-level expertise
-- 10× to 30× cost ratio versus unverified code
-- Economics and velocity kills it
+- 10× to 30× cost ratio versus tested and manually reviewed code
+- Economics and velocity kill it
 
 <!-- end_slide -->
 
@@ -151,14 +154,14 @@ Encoded:  `0111`  `0110101`     (11 bits)
 
 - Rocq is a proof **checker**, not a proof finder
 - Writing proofs is hard, checking them is mechanical
-- Same asymmetry as cryptography: verify is cheaper than produce
+- Think `ocamlc -i` _vs_ writing `.mli` by hand — checking is cheap, finding is expensive
 
 <!-- pause -->
 
-- Claude finds the proofs, about 3,600 lines (I steer the strategy)
+- Claude finds the proofs, about 4,200 lines (I steer the strategy)
 - Rocq kernel checks every lemma, rejects anything wrong
-- Does not matter **how** the proof was written, only that it passes the checker
-- Not all languages equal: OCaml, Rust or C are easier to verify than Python or JavaScript
+- **How** the proof was written is irrelevant, only that it passes the checker
+- Language matters: OCaml, Rust or C are easier to verify than Python or JavaScript
 
 <!-- end_slide -->
 
@@ -168,9 +171,9 @@ The *trusted computing base*: know exactly who is responsible for what.
 
 | Layer | LOC | Tool | Reviewed by |
 |-------|-----|------|-------------|
-| Specification | 773 | Rocq | Human |
-| Proof | 2,874 | Rocq | Kernel |
-| Extracted OCaml | 101 | Extraction | Nobody |
+| Specification | 129 | Rocq | Human |
+| Proof | 4,224 | Rocq | Kernel |
+| Extracted OCaml | 238 | Extraction | Nobody |
 | C stubs | 14 | GCC | Human |
 
 <!-- pause -->
@@ -179,8 +182,48 @@ The *trusted computing base*: know exactly who is responsible for what.
 - Proof shows **why** it is correct
 - Rocq *extraction* translates proven code into OCaml automatically
 - Code implements **how** it runs
-- Human reviews **34 lines** total. Rest is machine-checked.
-- You already trust the OS, the compiler, the hardware. This is no different
+- Human reviews **143 lines** total. Rest is machine-checked.
+- TCB boundary: Rocq kernel & runtime, OCaml compiler and `Stdlib`, OS, HW
+- Same things you already trust for any OCaml program
+- C stubs (`popcount`, `ctz`) are the only project-specific addition
+
+<!-- end_slide -->
+
+# What Is Proved
+
+<!-- column_layout: [1, 1] -->
+
+<!-- column: 0 -->
+
+### Correctness (ℤ level)
+
+| Property | Status |
+|----------|--------|
+| round_trip | Proved |
+| access_correct | Proved |
+| nextGEQ_found | Proved |
+| nextGEQ_smallest | Proved |
+| nextGEQ_none | Proved |
+| space_bound | Proved |
+| rank_select | Proved |
+| select_rank | Proved |
+| popcount_spec | Axiom (C shim) |
+
+<!-- column: 1 -->
+
+### Agreement (Int63 level)
+
+| Property | Status |
+|----------|--------|
+| access63_agrees | Proved |
+| decode63_agrees | Proved |
+| nextGEQ63_found | Proved |
+| nextGEQ63_smallest | Proved |
+| nextGEQ63_none | Proved |
+
+<!-- reset_layout -->
+
+Only axiom: `popcount_spec` — backed by 3-line C shim using `__builtin_popcountl`
 
 <!-- end_slide -->
 
@@ -192,13 +235,13 @@ The *trusted computing base*: know exactly who is responsible for what.
 
 ### Specification: ℕ and ℤ
 
-- Unbounded - No overflow
+- Unbounded — no overflow
 - Naturals
   - Peano (OCaml: `unit list`)
   - List positions
   - Structural recursion
 - Integers
-  - Ocaml: `bool * bool list`
+  - OCaml: `bool * bool list`
   - Proof automation
   - Clean math
 
@@ -216,12 +259,13 @@ The *trusted computing base*: know exactly who is responsible for what.
 
 - Algorithmic correctness lives in ℤ
 - But ℤ arithmetic is impractical at runtime
+- Algorithms and programs are related, but distinct things
 - `Int63` gives native performance, but can overflow and wrap
 - Bridging lemmas connect both: prove they agree when values fit
 
 <!-- end_slide -->
 
-# *Agrees* Pattern
+# *Agrees* Pattern — `round_trip` example
 
 - Prove `Int63` implementation agrees with ℤ specification when inputs fit
 - Then derive all properties from ℤ-level theorems
@@ -240,7 +284,7 @@ Theorem access63_agrees : forall U vals i,
 
 <!-- end_slide -->
 
-# *Agrees* Pattern
+# *Agrees* Pattern — `round_trip` example
 
 - Prove `Int63` implementation agrees with ℤ specification when inputs fit
 - Then derive all properties from ℤ-level theorems
@@ -258,10 +302,10 @@ Accessing the *i*-th element in the `Int63` encoding gives the same result as in
 
 <!-- end_slide -->
 
-# Popcount: Explicit Axioms
+# Popcount: Explicit Axiom
 
 - Efficient Elias-Fano select needs **popcount** (count set bits)
-- CPU provides `popcnt` instruction, but OCaml does not expose it
+- CPU provides `popcnt` instruction, but OCaml does not expose it, yet
 - Solution: C stub and Rocq axiom tying them together
 
 <!-- pause -->
@@ -289,12 +333,12 @@ Rocq `Print Assumptions` lists exactly what is trusted.
 
 # Effort Breakdown
 
-- **104 lemmas**, 0 Admitted, 2 axioms (`popcount` and `select`)
-- Specification: 773 LOC, the *contract*
-- Refinement: 2,874 LOC, the *proof of contract*
-- Extraction glue: 27 LOC
+- **110 lemmas**, 0 Admitted, 1 axiom (`popcount_spec`)
+- Specification: 129 LOC, the *contract*
+- Proofs: 4,224 LOC, the *proof of contract*
+- Extraction glue: 10 LOC
 - C stubs: 14 LOC, only unverified logic
-- 4 top-level theorems: decode, nextGEQ (found/smallest/none)
+- 5 top-level theorems: `access`, `decode`, `nextGEQ` (found/smallest/none)
 - Each proved via *agrees* reduction to ℤ-level theorems
 - Human effort: about **1 person-day**
 
@@ -313,7 +357,7 @@ Definition nextGEQ (enc : encoded) (v : Z) : option Z := ...
 
 <!-- pause -->
 
-About 20 lines of Rocq specification define what **correct** means.
+About 20 lines of theorem statements define what **correct** means.
 
 This is what you review. Nothing else.
 
@@ -332,7 +376,7 @@ Goal: to_Z (access63 (encode63 U vals) i)
 <!-- pause -->
 
 - Unfold definitions, expose ℤ/ℕ/`Int63` boundaries
-- `lia` handles arithmetic, `bitblast` handles bitwise
+- Tactics: `lia` handles arithmetic, `bitblast` handles bitwise
 - Watch the goal transform step by step
 
 <!-- end_slide -->
@@ -340,21 +384,21 @@ Goal: to_Z (access63 (encode63 U vals) i)
 # Demo Part 3: Build and Run
 
 ```bash
-$ ./build.sh          # 3,647 lines type-checked
+$ ./build.sh          # 4,353 lines type-checked
 $                     # nothing visible, that is the point
 $ ./bench/run.sh      # encode, access, decode, nextGEQ
 ```
 
 <!-- pause -->
 
-Quietest build is most trustworthy.
+The quietest build is the most trustworthy.
 
 <!-- end_slide -->
 
 # Oracle and Performance
 
 - **Ground truth**: Sux (Vigna's C++ library)
-- **100% match** at n = 3, 1,000, 10,000, 100,000
+- **100% match** at n = 3; 1,000; 10,000; 100,000
 
 | Operation | versus Sux |
 |-----------|------------|
@@ -364,73 +408,118 @@ Quietest build is most trustworthy.
 
 <!-- pause -->
 
-- Proved correct does not mean fast (yet)
-- Linear-scan nextGEQ versus Sux's O(1) rank-based jump
+- Proved correct against machine integers does not mean fast
+- Linear-scan `nextGEQ` versus Sux's O(1) rank-based jump
 - No precomputed rank tables
+
+<!-- end_slide -->
+
+# Closing the Gap
+
+- `dune -opaque` kills cross-module inlining of `Int63` ops
+- Hacked around with C stubs, bypassing OCaml code
+- Trading trust in Rocq runtime into our own thin layer
+- Vigna's broadword `select` replaces linear `popcount` scan
+- Mutable array shim (`Ef_parray`) eliminates `PArray` diff chain
+- All still proved correct — only the extraction layer changes
+
+<!-- pause -->
+
+| Operation | before | after  |
+|-----------|--------|--------|
+| access    | 1–17×  | 1.15×  |
+| nextGEQ   | —      | 1.19×  |
+| decode    | 23×    | 1.62×  |
+| encode    | 3×     | 4.4×   |
+
+Times are versus Sux (Vigna's C++ library, n = 100M)
+
+<!-- pause -->
+
+- From 23× slower to 1.6× — without touching a single proof
+- Encode is still slow: list input + fuel-based build (extraction artefact)
 
 <!-- end_slide -->
 
 # Cost of Verification
 
-- About 30× more Rocq code than unverified OCaml
-- But:
-- Specification is reusable across implementations
-- Bugs found mechanically, not by humans
-- No review needed for extracted code or proofs
-- Refactoring changes proof, not specification
-
-<!-- end_slide -->
-
-# Human + LLM Collaboration
-
-- **Phase 1**: User identified term explosion `Z_count_ones 63`
-- **Phase 2**: LLM proved 30+ bridging lemmas via Model Context Protocol
-- **Phase 3**: LLM ground through `bv_select_aux_agrees` across 3 contexts
-- **Phase 4**: User taught “apply atomic conversions, watch the term”
-- **Phase 5**: 4 final theorems fell in hours using established patterns
+- About 30× more Rocq code than unverified OCaml, but:
+  - Specification is reusable across implementations
+  - Bugs found mechanically, not by humans
+  - No review needed for extracted code or proofs
+  - Refactoring changes proof, not specification
 
 <!-- pause -->
 
-I cheated you: I used my PhD in Coq for fixing Rocq performance pathologies.
+- `Int63` refinement required human steering:
+  - Term explosion `Z_count_ones 63` → controlled unfolding
+  - Taught LLM "apply atomic conversions, watch the term"
+  - LLM proved 30+ bridging lemmas via Model Context Protocol
+  - `bv_select_aux_agrees` ground through 3 contexts
+  - 4 final theorems fell in hours using established patterns
 
 <!-- end_slide -->
 
-# Rocq/Coq Rebranding Friction
+# Human + LLM Workflow
 
-- Coq renamed to Rocq in 2024, documentation split
-- LLM training data is overwhelmingly “Coq”
-- Import paths changed (`From Coq` became `From Stdlib`)
-- Version-specific bugs like `PArray` universe polymorphism in 9.1
-- Real friction for AI-assisted formal methods
-- Model Context Protocol servers `rocq-mcp` help bridge the gap
+1. Generation of the specification at ℤ/ℕ level
+2. Review of the specification
+3. LLM autonomous proof search and Rocq verification
+4. Extraction and benchmarking: non-performance
+
+<!-- pause -->
+
+5. Expansion of the specification to `Int63` and `PArray`
+6. LLM proof search, Rocq verification — I had to help here
+7. Extraction and benchmarking: 3× to 23× slower than Sux
+8. Proof refactoring — I had to steer, it could not guess
+9. Implementation and verification of Vigna's hacks, automatic again
+10. Extraction and benchmarking: 1.15× to 4.4× slower than Sux
+
+<!-- pause -->
+
+Honest truth:
+- I had to use my PhD experience in Rocq
+- LLM agent could not overcome Rocq performance pathologies, yet
 
 <!-- end_slide -->
 
 # Takeaways
 
-- LLMs help break through the 10× to 30× verification cost barrier
-- Explicit trust beats implicit trust
-- Specification is the new code review
+- LLMs help break through the 10× to 30× verification workload barrier
+- Explicit trust beats vibe-coding cargo cult
+- Review: from code-level towards specification-level
 
 <!-- pause -->
 
-- 34 lines of human-reviewed code
-- 3,647 lines of machine-checked proofs
-- 0 admitted
+- 143 lines of human-reviewed code
+- 4,353 lines of machine-checked proofs
+- 238 lines of extracted OCaml, never read
+- 0 admitted, but axioms for trusted assembly instructions
 
 <!-- pause -->
 
-- The review wall has a door. Speak *formal*, and enter
+- LLM raises the _best-effort_ software quality bar
+  - Yesterday: tests and code reviews
+  - Today: formal specs and machine-checked properties
+- Next Steps
+  - Turn this into a model benchmark
+  - Compare with Lean + Mistral
+
+<!-- pause -->
+
+The review wall has a door. Speak *formal*, and enter
 
 <!-- end_slide -->
 
 # Questions?
 
-Project: github.com/cuihtlauac/eliasfano
+github.com/cuihtlauac/eliasfano
 
 ```
-104 lemmas · 0 Admitted · 2 axioms
-773 + 2,874 LOC Rocq · 14 LOC C
+110 lemmas · 0 Admitted · 1 axiom
+129 + 773 + 3,451 LOC Rocq
+238 LOC OCaml · 14 LOC C
 ```
 
 <!-- end_slide -->
@@ -493,6 +582,15 @@ Proof. exact (get_set_same int t i a). Qed.
 
 <!-- end_slide -->
 
+# Appendix A5: Rocq/Coq Rebranding Friction
+
+- Coq renamed to Rocq in 2024, documentation split
+- LLM training data is overwhelmingly “Coq”
+- Import paths changed (`From Coq` became `From Stdlib`)
+- Version-specific bugs like `PArray` universe polymorphism in 9.1
+- Real friction for AI-assisted formal methods
+- Model Context Protocol servers `rocq-mcp` help bridge the gap
+
 # Appendix: References
 
 **Studies**
@@ -503,7 +601,7 @@ Proof. exact (get_set_same int t i a). Qed.
 **Formal methods milestones**
 - [Hoare, 1969 — Axiomatic basis](https://dl.acm.org/doi/10.1145/363235.363259) · [LCF](https://en.wikipedia.org/wiki/Logic_for_Computable_Functions) · [Calculus of Constructions](https://www.sciencedirect.com/science/article/pii/0890540188900053)
 - [Abstract interpretation](https://en.wikipedia.org/wiki/Abstract_interpretation) · [Model checking](https://en.wikipedia.org/wiki/Model_checking) · [Separation logic](https://en.wikipedia.org/wiki/Separation_logic)
-- [CompCert](https://dl.acm.org/doi/10.1145/1538788.1538814) · [seL4](https://dl.acm.org/doi/10.1145/1629575.1629596) · [EverCrypt](https://project-everest.github.io/)
+- [CompCert](https://dl.acm.org/doi/10.1145/1538788.1538814) · [seL4](https://dl.acm.org/doi/10.1145/1629575.1629596) · [EverParse](https://project-everest.github.io/everparse/)
 - [Astrée](https://www.astree.ens.fr/) · [Meta Infer](https://fbinfer.com/)
 
 **Elias-Fano**
