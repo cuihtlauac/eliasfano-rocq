@@ -55,7 +55,7 @@ AI environmental, ethical, political and social concerns.
 
 <!-- end_slide -->
 
-# Example Problem: Compact Sorted Integers
+# Running Example: Compact Sorted Integers
 
 - Sebastiano Vigna modernized Elias-Fano with quasi-succinct indices (2013)
 - Store sorted integers compactly with fast access
@@ -86,10 +86,10 @@ lower bits: [0, 1, 1, 1]           (last bit of each value)
              0  1  2  3  4  5  6
 upper bits: [0, 1, 1, 0, 1, 0, 1]
                 ^  ^     ^     ^
-                1  1     2     3    (position - rank = upper prefix)
+                1  1     2     3    (pos - rank = prefix)
 ```
 
-Value upper prefix count, in _unary_:
+Value prefix (upper bits) count, in _unary_:
 - Prefix `00` appears 0   (`0`) times
 - Prefix `01` appears 2 (`110`) times (values 2 and 3)
 - Prefix `10` appears 1  (`10`) time (value 5)
@@ -108,7 +108,7 @@ Encoded:  `0111` `0 110 10 1`   (11 bits)
 - `decode` iterates access over all elements
 - Key primitive: `select(bv, i)` returns position of *i*-th set bit
 - My implementation uses popcount-based scan over 63-bit words
-- Vigna's Sux code is heavily optimized, full of broadword tricks and bit hacks
+- Vigna's Sux code is heavily optimized, broadword tricks and bit hacks
 
 <!-- end_slide -->
 
@@ -121,21 +121,19 @@ Encoded:  `0111` `0 110 10 1`   (11 bits)
 - **1984** Calculus of Constructions (Coquand), becomes Coq
 - **2002** Separation logic (O'Hearn, Reynolds, Yang), reasoning about pointers
 - **2017** Meta Infer, separation logic in CI at scale
-- 55+ years of foundations, only recently reaching industry
-
-<!-- end_slide -->
-
-# Mathematical Assurance
-
-- Mathematical **assurance** that code meets specification
-- Not **testing harder**, a different kind of trust
-- Specification says “decode Elias-Fano encoding, get back original list”
-- Proof shows for **all** sorted inputs, `decode(encode(vals)) = vals`
-- Bit manipulation, overflow, select: every corner case covered
+- 55+ years of foundations, recent and limited industry reach
 
 <!-- end_slide -->
 
 # Why Formal Methods Are Rare
+
+- Mathematical **assurance** that code meets specification
+- Not **testing harder**, a different kind of trust
+  - Specification says “decode Elias-Fano encoding, get back original list”
+  - Proof shows for **all** sorted inputs, `decode(encode(vals)) = vals`
+  - Bit manipulation, overflow, select: every corner case covered
+
+<!-- pause -->
 
 | Project | What | Person-years | LOC | Tool |
 |---------|------|--------------|-----|------|
@@ -154,17 +152,19 @@ Encoded:  `0111` `0 110 10 1`   (11 bits)
 
 # Writing Terms *vs* Type-Checking
 
-- Rocq is a type checker for a type system so expressive that (almost) all maths fits in
+- What is Rocq?
+  - A functional programming language's type checker
+  - It's type system is so expressive, maths fits in
+  - Trade-off: you can't write non-terminating recursion
 - A proof is a well-typed term; verification is type-checking
-- Writing proofs is hard, checking them is mechanical
-- Think `ocamlc -i` _vs_ writing `.mli` by hand — checking is cheap, finding is expensive
+- Constructing proofs is hard, checking them is mechanical
 
 <!-- pause -->
 
 - Claude writes the terms, about 4,200 lines (I steer the strategy)
 - Rocq type-checks every lemma, rejects anything wrong
 - **How** the term was written is irrelevant, only that it type-checks
-- Language matters: OCaml, Rust or C are easier to verify than Python or JavaScript
+- Language matters: OCaml or Rust easier to verify than Python or JavaScript
 
 <!-- end_slide -->
 
@@ -185,7 +185,7 @@ The *trusted computing base*: know exactly who is responsible for what.
 - Proof shows **why** it is correct
 - Code implements **how** it runs
 - This is *verified programming*, not *extraction* in the Paulin-Mohring sense
-  - Functions translated from Rocq to OCaml, not synthesised from existence proofs
+  - Functions translated from Rocq to OCaml, not synthesised from ∀∃ proofs
   - Think of it as FP purer than Haskell — not even IO
 - Human reviews **143 lines** total. Rest is machine-checked.
 - TCB boundary: Rocq kernel & runtime, OCaml compiler and `Stdlib`, OS, HW
@@ -255,7 +255,7 @@ Only axiom: `popcount_spec` — backed by 3-line C shim using `__builtin_popcoun
 
 <!-- end_slide -->
 
-# *Agrees* Pattern — `round_trip` example
+# *Agrees* Pattern — `access` example
 
 - Prove `Int63` implementation agrees with ℤ specification when inputs fit
 - Then derive all properties from ℤ-level theorems
@@ -274,7 +274,7 @@ Theorem access63_agrees : forall U vals i,
 
 <!-- end_slide -->
 
-# *Agrees* Pattern — `round_trip` example
+# *Agrees* Pattern — `access` example
 
 - Prove `Int63` implementation agrees with ℤ specification when inputs fit
 - Then derive all properties from ℤ-level theorems
