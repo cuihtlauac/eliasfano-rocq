@@ -29,6 +29,11 @@ Can the agent go from 8 `Conjecture` statements to Qed on abstract
 - **Metric:** Auto-formalization rate (0–8)
 - **Evaluation:** `benchmarks/harness/evaluate_a.sh`
 
+**Known issue:** The `space_bound` conjecture is vacuous — `bit_size`
+is a `Parameter` that the implementation defines freely, so an identity
+encoding with `bit_size := 0` satisfies it. See FIXME in
+`theories/EliasFanoSpec.v`.
+
 ### Benchmark B — The Implementation Gap (Refinement Proofs)
 
 Given verified Z-level proofs and concrete Int63 implementations,

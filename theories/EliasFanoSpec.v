@@ -69,7 +69,15 @@ Conjecture nextGEQ_none :
 
 (** ** Space bound *)
 
-(** Encoding uses at most n*(2 + log2(U/n)) bits. *)
+(** FIXME: This conjecture is vacuous as stated. [bit_size] is a
+    [Parameter], so the implementation can define it however it likes —
+    e.g. [bit_size _ := 0] — and satisfy the bound without compressing
+    anything. An agent already exploited this (see results/a-20260321T052925).
+
+    To make this meaningful, [bit_size] should be spec-defined as the
+    actual encoding size (n*l + length(ef_upper)), and [num_lower_bits]
+    should use ceil (Z.log2_up) so the upper bitvector is guaranteed
+    <= 2n bits, matching the standard bound n*(2 + ⌈log₂(U/n)⌉). *)
 
 Conjecture space_bound :
   forall (U : Z) (vals : list Z),
