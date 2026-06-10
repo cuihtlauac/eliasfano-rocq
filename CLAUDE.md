@@ -29,10 +29,13 @@ Can the agent go from 8 `Conjecture` statements to Qed on abstract
 - **Metric:** Auto-formalization rate (0–8)
 - **Evaluation:** `benchmarks/harness/evaluate_a.sh`
 
-**Known issue:** The `space_bound` conjecture is vacuous — `bit_size`
-is a `Parameter` that the implementation defines freely, so an identity
-encoding with `bit_size := 0` satisfies it. See FIXME in
-`theories/EliasFanoSpec.v`.
+**Note:** `space_bound` was once vacuous (`bit_size` was a free
+`Parameter`; an agent exploited it with `bit_size := 0`, see
+`benchmarks/results/a-20260321T052925`). It is now stated on a
+serialization (`to_bits`/`of_bits`): decoding must succeed from the
+counted bit list, which fits in n·(2 + ⌈log₂(U/n)⌉) bits — the
+standard bound, with exact rational U/n (`ceil_log2` over Q, justified
+by a proved Galois lemma in the spec).
 
 ### Benchmark B — The Implementation Gap (Refinement Proofs)
 

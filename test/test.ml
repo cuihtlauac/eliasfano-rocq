@@ -27,7 +27,7 @@ let () =
   assert (Elias_fano.decode (Elias_fano.encode ~universe:10 [|0|]) = [|0|]);
   assert (Elias_fano.decode (Elias_fano.encode ~universe:100 [|0; 0; 0|]) = [|0; 0; 0|]);
 
-  (* bit_size *)
-  assert (Elias_fano.bit_size t = 21);
+  (* bit_size: 3*5 lower bits + 4 upper bits *)
+  assert (Elias_fano.bit_size t = 19);
 
   Printf.printf "All tests passed.\n"

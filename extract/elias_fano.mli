@@ -19,7 +19,8 @@ val access : t -> int -> int
 (** [next_geq t v] returns the smallest element [>= v], or [None]. *)
 val next_geq : t -> int -> int option
 
-(** [bit_size t] returns an upper bound on the encoding size in bits. *)
+(** [bit_size t] returns the exact encoding size in bits:
+    [n * l] lower bits plus the upper bitvector length. *)
 val bit_size : t -> int
 
 (** [length t] returns the number of encoded elements. *)

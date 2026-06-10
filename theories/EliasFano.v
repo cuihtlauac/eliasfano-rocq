@@ -2,6 +2,7 @@
 
 From Stdlib Require Import ZArith List Bool Sorting Lia Uint63.
 From Stdlib Require Import Permutation.
+From Stdlib Require Import QArith Qpower Qround.
 Import ListNotations.
 
 Open Scope Z_scope.
@@ -17,6 +18,32 @@ Definition all_nonneg (vals : list Z) : Prop :=
 
 Definition bounded_by (U : Z) (vals : list Z) : Prop :=
   Forall (fun x => x < U) vals.
+
+(** [ceil_log2 q] = ⌈log₂ q⌉ for q >= 1, clamped to 0 for q <= 1. *)
+Definition ceil_log2 (q : Q) : Z := Z.log2_up (Qceiling q).
+
+(** ⌈log₂ q⌉ is the least k with q <= 2^k. *)
+Lemma ceil_log2_galois :
+  forall (q : Q) (k : Z),
+    (1 <= q)%Q -> 0 <= k ->
+    (ceil_log2 q <= k <-> (q <= inject_Z 2 ^ k)%Q).
+Proof.
+  intros q k Hq Hk.
+  unfold ceil_log2.
+  assert (Hm : 0 < Qceiling q).
+  { pose proof (Qceiling_resp_le 1 q Hq) as H.
+    change (Qceiling 1) with 1%Z in H. lia. }
+  rewrite <- (Z.log2_up_le_pow2 _ k Hm).
+  split.
+  - intros H.
+    eapply Qle_trans; [apply Qle_ceiling|].
+    rewrite <- Zpower_Qpower by exact Hk.
+    rewrite <- Zle_Qle. exact H.
+  - intros H.
+    rewrite <- Zpower_Qpower in H by exact Hk.
+    rewrite <- (Qceiling_Z (2 ^ k)).
+    apply Qceiling_resp_le. exact H.
+Qed.
 
 Fixpoint select_go (bv : list bool) (i : nat) (pos : nat) (count : nat) : nat :=
   match bv with
@@ -210,8 +237,42 @@ Fixpoint decode_aux (enc : encoded) (i : nat) (n : nat) : list Z :=
 Definition decode (enc : encoded) : list Z :=
   decode_aux enc 0 (ef_n enc).
 
+(** Serialization: the encoding laid out as a bit list — lower-bits
+    array as fixed-width little-endian chunks, then the upper bitvector.
+    [of_bits U n bits] rebuilds the encoding; [U] and [n] are caller
+    context, from which the chunk width [l] is recomputed. *)
+
+Fixpoint Z_to_bits (x : Z) (w : nat) : list bool :=
+  match w with
+  | O => []
+  | S w' => Z.odd x :: Z_to_bits (Z.div2 x) w'
+  end.
+
+Fixpoint Z_of_bits (bs : list bool) : Z :=
+  match bs with
+  | [] => 0
+  | b :: bs' => (if b then 1 else 0) + 2 * Z_of_bits bs'
+  end.
+
+Definition to_bits (enc : encoded) : list bool :=
+  concat (map (fun x => Z_to_bits x (Z.to_nat (ef_l enc))) (ef_lower enc))
+  ++ ef_upper enc.
+
+Fixpoint chunks (w : nat) (n : nat) (bs : list bool) : list (list bool) :=
+  match n with
+  | O => []
+  | S n' => firstn w bs :: chunks w n' (skipn w bs)
+  end.
+
+Definition of_bits (U : Z) (n : nat) (bs : list bool) : encoded :=
+  let l := num_lower_bits U (Z.of_nat n) in
+  let lw := (n * Z.to_nat l)%nat in
+  mk_ef (map Z_of_bits (chunks (Z.to_nat l) n (firstn lw bs)))
+        (skipn lw bs) l n.
+
+(** Exact encoding size in bits (kept for extraction). *)
 Definition bit_size (enc : encoded) : Z :=
-  Z.of_nat (ef_n enc) * (ef_l enc + 2).
+  Z.of_nat (length (to_bits enc)).
 
 Fixpoint nextGEQ_aux (enc : encoded) (v : Z) (i : nat) (n : nat) : option Z :=
   match n with
@@ -660,23 +721,298 @@ Qed.
 (* Part 7: Space bound                                                *)
 (* ================================================================= *)
 
+(* --- Serialization round-trip --- *)
+
+Lemma Z_to_bits_length : forall w x, length (Z_to_bits x w) = w.
+Proof.
+  induction w as [|w IH]; intros; simpl; [reflexivity | now rewrite IH].
+Qed.
+
+Lemma Z_of_Z_to_bits :
+  forall w x, 0 <= x < 2 ^ Z.of_nat w -> Z_of_bits (Z_to_bits x w) = x.
+Proof.
+  induction w as [|w IH]; intros x Hx; simpl.
+  - simpl in Hx. lia.
+  - rewrite IH.
+    + pose proof (Z.div2_odd x) as Hdo.
+      destruct (Z.odd x) eqn:Ho; rewrite ?Ho in Hdo; simpl in Hdo; lia.
+    + rewrite Nat2Z.inj_succ, Z.pow_succ_r in Hx by lia.
+      rewrite Z.div2_div.
+      split; [apply Z.div_pos; lia | apply Z.div_lt_upper_bound; lia].
+Qed.
+
+Lemma lower_bits_range :
+  forall l x, 0 <= l -> 0 <= lower_bits l x < 2 ^ l.
+Proof.
+  intros l x Hl. unfold lower_bits.
+  rewrite Z.land_ones by lia.
+  apply Z.mod_pos_bound.
+  apply Z.pow_pos_nonneg; lia.
+Qed.
+
+Lemma length_concat_same :
+  forall (xss : list (list bool)) (w : nat),
+    Forall (fun xs => length xs = w) xss ->
+    length (concat xss) = (length xss * w)%nat.
+Proof.
+  induction xss as [|xs xss IH]; intros w HF; simpl; [reflexivity|].
+  inversion HF as [|? ? Hx HF']; subst.
+  rewrite length_app, (IH _ HF'). lia.
+Qed.
+
+Lemma chunks_concat :
+  forall (xss : list (list bool)) (w : nat) (rest : list bool),
+    Forall (fun xs => length xs = w) xss ->
+    chunks w (length xss) (concat xss ++ rest) = xss.
+Proof.
+  induction xss as [|xs xss IH]; intros w rest HF; simpl; [reflexivity|].
+  inversion HF as [|? ? Hlen HF']; subst.
+  rewrite <- app_assoc.
+  rewrite firstn_app, firstn_all2 by lia.
+  rewrite Nat.sub_diag. simpl. rewrite app_nil_r.
+  rewrite skipn_app, skipn_all2 by lia.
+  rewrite Nat.sub_diag. simpl.
+  now rewrite IH by assumption.
+Qed.
+
+Lemma of_bits_to_bits :
+  forall (U : Z) (vals : list Z),
+    all_nonneg vals ->
+    of_bits U (length vals) (to_bits (encode U vals)) = encode U vals.
+Proof.
+  intros U vals Hnn.
+  unfold of_bits, to_bits, encode. simpl.
+  set (l := num_lower_bits U (Z.of_nat (length vals))).
+  assert (Hl : 0 <= l) by apply num_lower_bits_nonneg.
+  set (low := map (lower_bits l) vals).
+  set (xss := map (fun x => Z_to_bits x (Z.to_nat l)) low).
+  assert (Hwidth : Forall (fun xs => length xs = Z.to_nat l) xss).
+  { apply Forall_forall. intros xs Hxs.
+    apply in_map_iff in Hxs. destruct Hxs as [x [<- _]].
+    apply Z_to_bits_length. }
+  assert (Hlenc : length (concat xss) = (length vals * Z.to_nat l)%nat).
+  { rewrite (length_concat_same xss (Z.to_nat l) Hwidth).
+    unfold xss, low. now rewrite !length_map. }
+  rewrite firstn_app, skipn_app, Hlenc, Nat.sub_diag.
+  rewrite firstn_all2 by lia.
+  rewrite skipn_all2 by lia.
+  simpl. rewrite app_nil_r.
+  f_equal.
+  replace (length vals) with (length xss)
+    by (unfold xss, low; now rewrite !length_map).
+  rewrite <- (app_nil_r (concat xss)).
+  rewrite (chunks_concat xss (Z.to_nat l) [] Hwidth).
+  unfold xss, low. rewrite map_map.
+  etransitivity; [|apply map_id].
+  apply map_ext_in.
+  intros x Hx.
+  apply in_map_iff in Hx. destruct Hx as [x0 [<- _]].
+  apply Z_of_Z_to_bits.
+  rewrite Z2Nat.id by exact Hl.
+  apply lower_bits_range. exact Hl.
+Qed.
+
+(* --- Length of the serialization --- *)
+
+Lemma sorted_map_upper :
+  forall l vals, 0 <= l -> sorted vals -> sorted (map (upper_value l) vals).
+Proof.
+  intros l vals Hl Hs. induction Hs as [|x xs Hs IH HF]; simpl; constructor.
+  - exact IH.
+  - apply Forall_map. revert HF. apply Forall_impl.
+    intros y Hy. apply upper_value_mono; assumption.
+Qed.
+
+Lemma last_map_upper :
+  forall l vals, vals <> [] ->
+    last (map (upper_value l) vals) 0 = upper_value l (last vals 0).
+Proof.
+  intros l vals Hne.
+  induction vals as [|x [|y vals'] IH]; [contradiction| reflexivity |].
+  simpl in *. apply IH. discriminate.
+Qed.
+
+Lemma to_bits_length :
+  forall (U : Z) (vals : list Z),
+    sorted vals -> all_nonneg vals -> vals <> [] ->
+    let n := Z.of_nat (length vals) in
+    let l := num_lower_bits U n in
+    Z.of_nat (length (to_bits (encode U vals)))
+      = n * l + (upper_value l (last vals 0) + n).
+Proof.
+  intros U vals Hs Hnn Hne n l.
+  unfold to_bits, encode. simpl.
+  fold n. fold l.
+  rewrite length_app.
+  assert (Hl : 0 <= l) by apply num_lower_bits_nonneg.
+  set (xss := map (fun x => Z_to_bits x (Z.to_nat l)) (map (lower_bits l) vals)).
+  assert (Hwidth : Forall (fun xs => length xs = Z.to_nat l) xss).
+  { apply Forall_forall. intros xs Hxs.
+    apply in_map_iff in Hxs. destruct Hxs as [x [<- _]].
+    apply Z_to_bits_length. }
+  rewrite (length_concat_same xss (Z.to_nat l) Hwidth).
+  replace (length xss) with (length vals)
+    by (unfold xss; now rewrite !length_map).
+  assert (Hup : Z.of_nat (length (build_upper (map (upper_value l) vals)))
+                = upper_value l (last vals 0) + n).
+  { rewrite length_build_upper.
+    - rewrite last_map_upper by exact Hne.
+      unfold n. now rewrite length_map.
+    - destruct vals; [contradiction | discriminate].
+    - pose proof (Forall_map_upper_nonneg l vals Hl Hnn) as H.
+      revert H. apply Forall_impl. lia.
+    - apply sorted_map_upper; assumption. }
+  rewrite Nat2Z.inj_add, Hup.
+  rewrite Nat2Z.inj_mul, Z2Nat.id by exact Hl.
+  unfold n. lia.
+Qed.
+
+(* --- The bound, parameterized by any k with U <= n * 2^k --- *)
+
+Lemma last_In_list :
+  forall (xs : list Z) (d : Z), xs <> [] -> In (last xs d) xs.
+Proof.
+  induction xs as [|x [|y xs'] IH]; intros d Hne;
+    [contradiction | left; reflexivity |].
+  right. apply IH. discriminate.
+Qed.
+
+(** Core arithmetic: with l = ⌊log₂(U/n)⌋ (floor!), the size fits in
+    n * (2 + k) bits for ANY k >= 0 with U/n <= 2^k. The two cases:
+    - k = log2(U/n): forces U = n * 2^k exactly, last upper <= n - 1;
+    - k > log2(U/n): U/n < 2^(l+1) gives last upper <= 2n - 1. *)
+Lemma space_bound_k :
+  forall (U : Z) (vals : list Z) (k : Z),
+    sorted vals -> all_nonneg vals -> bounded_by U vals ->
+    vals <> [] -> 0 < U ->
+    0 <= k -> U <= Z.of_nat (length vals) * 2 ^ k ->
+    Z.of_nat (length (to_bits (encode U vals)))
+      <= Z.of_nat (length vals) * (2 + k).
+Proof.
+  intros U vals k Hs Hnn Hb Hne HU Hk HUk.
+  rewrite (to_bits_length U vals Hs Hnn Hne).
+  set (n := Z.of_nat (length vals)) in *.
+  set (l := num_lower_bits U n) in *.
+  assert (Hn : 1 <= n).
+  { unfold n. destruct vals; [contradiction | simpl; lia]. }
+  assert (Hl : 0 <= l) by apply num_lower_bits_nonneg.
+  assert (Hpow_l : 0 < 2 ^ l) by (apply Z.pow_pos_nonneg; lia).
+  assert (Hpow_k : 0 < 2 ^ k) by (apply Z.pow_pos_nonneg; lia).
+  (* last vals 0 <= U - 1 *)
+  assert (Hin : In (last vals 0) vals) by (apply last_In_list; exact Hne).
+  assert (Hlast : last vals 0 <= U - 1).
+  { unfold bounded_by in Hb. rewrite Forall_forall in Hb.
+    specialize (Hb _ Hin). lia. }
+  assert (Hlast_nn : 0 <= last vals 0).
+  { unfold all_nonneg in Hnn. rewrite Forall_forall in Hnn. auto. }
+  assert (Hup : upper_value l (last vals 0) <= (U - 1) / 2 ^ l).
+  { unfold upper_value. rewrite Z.shiftr_div_pow2 by exact Hl.
+    apply Z.div_le_mono; lia. }
+  (* enough: (U-1)/2^l <= n * (k - l + 1) *)
+  enough (Hgoal : (U - 1) / 2 ^ l <= n * (k - l + 1)) by nia.
+  unfold l, num_lower_bits in *.
+  destruct (n <=? 0) eqn:Hn0; [apply Z.leb_le in Hn0; lia|].
+  destruct (U <=? 0) eqn:HU0; [apply Z.leb_le in HU0; lia|].
+  apply Z.leb_gt in Hn0, HU0.
+  set (m := U / n) in *.
+  destruct (Z.eq_dec m 0) as [Hm0 | Hm].
+  - (* U < n: l = log2 0 = 0, last value < n *)
+    assert (HUn : U < n).
+    { unfold m in Hm0. destruct (Z.lt_ge_cases U n); [assumption|].
+      assert (1 <= U / n) by (apply Z.div_le_lower_bound; lia). lia. }
+    rewrite Hm0. simpl (Z.log2 0).
+    rewrite Z.pow_0_r, Z.div_1_r. nia.
+  - assert (Hm1 : 1 <= m).
+    { unfold m. assert (0 <= U / n) by (apply Z.div_pos; lia). lia. }
+    pose proof (Z.log2_spec m ltac:(lia)) as [Hlo Hhi].
+    set (lg := Z.log2 m) in *.
+    assert (Hlg_nn : 0 <= lg) by (unfold lg; apply Z.log2_nonneg).
+    assert (Hpow_lg : 0 < 2 ^ lg) by (apply Z.pow_pos_nonneg; lia).
+    assert (Hnm : n * 2 ^ lg <= U).
+    { apply Z.le_trans with (n * m); [nia|].
+      unfold m. pose proof (Z.mul_div_le U n ltac:(lia)). lia. }
+    (* lg <= k, else n*2^lg <= U <= n*2^k < n*2^lg *)
+    assert (Hlk : lg <= k).
+    { destruct (Z.lt_ge_cases k lg) as [Hkl | ]; [|assumption].
+      exfalso.
+      assert (2 ^ (k + 1) <= 2 ^ lg) by (apply Z.pow_le_mono_r; lia).
+      assert (2 ^ (k + 1) = 2 * 2 ^ k) by (rewrite Z.pow_add_r by lia; lia).
+      nia. }
+    destruct (Z.eq_dec lg k) as [Heq | Hneq].
+    + (* k = lg: forces U = n * 2^lg *)
+      assert (HUeq : U = n * 2 ^ lg) by (rewrite Heq in *; lia).
+      replace (k - lg + 1) with 1 by lia.
+      rewrite Z.mul_1_r.
+      apply Z.div_le_upper_bound; [lia | nia].
+    + (* lg + 1 <= k: U < n * 2^(lg+1), so (U-1)/2^lg < 2n *)
+      assert (Hk1 : lg + 1 <= k) by lia.
+      assert (HUub : U <= n * (2 * 2 ^ lg) - 1).
+      { rewrite Z.pow_succ_r in Hhi by lia.
+        destruct (Z.lt_ge_cases U (n * (2 * 2 ^ lg))) as [|Hge]; [lia|].
+        exfalso.
+        assert (2 * 2 ^ lg <= m) by (apply Z.div_le_lower_bound; lia).
+        lia. }
+      assert (Hdiv : (U - 1) / 2 ^ lg < 2 * n).
+      { apply Z.div_lt_upper_bound; [lia | nia]. }
+      nia.
+Qed.
+
+(* --- Instantiation at k = ⌈log₂(U/n)⌉ --- *)
+
+Lemma ceil_log2_nonneg : forall q, 0 <= ceil_log2 q.
+Proof. intros q. apply Z.log2_up_nonneg. Qed.
+
+Lemma U_le_pow_ceil_log2 :
+  forall (U n : Z), 0 < U -> 0 < n ->
+    U <= n * 2 ^ ceil_log2 (inject_Z U / inject_Z n).
+Proof.
+  intros U n HU Hn.
+  set (q := (inject_Z U / inject_Z n)%Q).
+  set (k := ceil_log2 q).
+  assert (Hk : 0 <= k) by apply ceil_log2_nonneg.
+  assert (Hpow : 0 < 2 ^ k) by (apply Z.pow_pos_nonneg; lia).
+  destruct (Z.le_gt_cases U n) as [HUn | HUn].
+  - nia.
+  - (* n < U: 1 <= q, Galois applies *)
+    assert (Hn_pos : (0 < inject_Z n)%Q).
+    { change 0%Q with (inject_Z 0). rewrite <- Zlt_Qlt. lia. }
+    assert (Hq1 : (1 <= q)%Q).
+    { unfold q. apply Qle_shift_div_l; [exact Hn_pos|].
+      rewrite Qmult_1_l. rewrite <- Zle_Qle. lia. }
+    pose proof (ceil_log2_galois q k Hq1 Hk) as [Hgal _].
+    specialize (Hgal (Z.le_refl k)).
+    (* q <= 2^k  ->  U <= n * 2^k *)
+    assert (HUq : (inject_Z U == inject_Z n * q)%Q).
+    { unfold q. field.
+      intro H. unfold Qeq in H. simpl in H. lia. }
+    assert (Hmul : (inject_Z U <= inject_Z n * inject_Z 2 ^ k)%Q).
+    { rewrite HUq.
+      apply (proj2 (Qmult_le_l q (inject_Z 2 ^ k) (inject_Z n) Hn_pos)).
+      exact Hgal. }
+    rewrite <- Zpower_Qpower in Hmul by exact Hk.
+    rewrite <- inject_Z_mult, <- Zle_Qle in Hmul.
+    exact Hmul.
+Qed.
+
 Theorem space_bound :
   forall (U : Z) (vals : list Z),
     sorted vals -> all_nonneg vals -> bounded_by U vals ->
     vals <> [] -> 0 < U ->
     let n := Z.of_nat (length vals) in
-    bit_size (encode U vals) <= n * (2 + Z.log2 (U / n)).
+    let bits := to_bits (encode U vals) in
+    decode (of_bits U (length vals) bits) = vals /\
+    Z.of_nat (length bits) <= n * (2 + ceil_log2 (inject_Z U / inject_Z n)).
 Proof.
-  intros U vals Hs Hnn Hb Hne HU n.
-  unfold bit_size, encode, num_lower_bits. simpl ef_n. simpl ef_l.
-  fold n.
-  destruct (n <=? 0) eqn:Hn.
-  - apply Z.leb_le in Hn. unfold n in Hn.
-    destruct vals; [contradiction|simpl in Hn; lia].
-  - apply Z.leb_gt in Hn.
-    destruct (U <=? 0) eqn:HU'.
-    + apply Z.leb_le in HU'. lia.
-    + apply Z.leb_gt in HU'. lia.
+  intros U vals Hs Hnn Hb Hne HU n bits.
+  assert (Hn : 0 < n).
+  { unfold n. destruct vals; [contradiction | simpl; lia]. }
+  split.
+  - unfold bits. rewrite (of_bits_to_bits U vals Hnn).
+    apply round_trip; assumption.
+  - unfold bits, n.
+    apply space_bound_k; try assumption.
+    + apply ceil_log2_nonneg.
+    + apply U_le_pow_ceil_log2; [exact HU | exact Hn].
 Qed.
 
 (* ================================================================= *)
@@ -767,7 +1103,13 @@ Eval compute in (position_of_ith_one [true; false; true; false; true] 2).
 Eval compute in (count_ones_up_to [true; false; true; false; true] 3).
 (* Expected: 2 *)
 
-(* --- Space bound --- *)
+(* --- Space bound / serialization --- *)
 
 Eval compute in (bit_size (encode 100 [3; 7; 42])).
-(* Expected: 3 * (5 + 2) = 21 *)
+(* Expected: 3*5 lower bits + 4 upper bits = 19 *)
+
+Eval compute in (decode (of_bits 100 3 (to_bits (encode 100 [3; 7; 42])))).
+(* Expected: [3; 7; 42] — round-trip through the serialized bits *)
+
+Eval compute in (3 * (2 + ceil_log2 (inject_Z 100 / inject_Z 3))).
+(* Expected: 3 * (2 + 6) = 24 >= 19, the conjectured bound *)

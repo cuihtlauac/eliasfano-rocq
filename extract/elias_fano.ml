@@ -206,7 +206,11 @@ let next_geq t v =
       in
       scan idx
 
+(* upper_bits includes one trailing sentinel zero (allocation artifact);
+   the canonical encoding is n + max_upper upper bits, matching the
+   verified serialization length (EliasFano.v, to_bits). *)
 let bit_size t =
-  t.n * (t.l + 2)
+  if t.n = 0 then 0
+  else t.n * t.l + t.upper_bits - 1
 
 let length t = t.n

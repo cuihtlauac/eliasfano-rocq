@@ -330,8 +330,12 @@ Fixpoint nextGEQ63_aux (enc : ef63) (v i : int) (n : nat) : option int :=
 Definition nextGEQ63 (enc : ef63) (v : int) : option int :=
   nextGEQ63_aux enc v 0 (Z.to_nat (to_Z (ef63_n enc))).
 
+(* Exact encoding size: n*l lower bits + upper bitvector. ef63_upper_bits
+   includes one trailing sentinel zero, hence the [sub _ 1]; matches the
+   verified serialization length (EliasFano.v, to_bits). *)
 Definition bit_size63 (enc : ef63) : int :=
-  mul (ef63_n enc) (add (ef63_l enc) 2).
+  if eqb (ef63_n enc) 0 then 0
+  else add (mul (ef63_n enc) (ef63_l enc)) (sub (ef63_upper_bits enc) 1).
 
 (* ================================================================= *)
 (* Part 4b: Fast operations using sampling indices                     *)

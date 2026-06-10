@@ -28,7 +28,6 @@ Parameter encoded : Type.
 Parameter encode : Z -> list Z -> encoded.  (** [encode U vals] *)
 Parameter decode : encoded -> list Z.
 Parameter access : encoded -> nat -> Z.
-Parameter bit_size : encoded -> Z.
 
 (** ** Core correctness: round-trip *)
 
@@ -69,22 +68,63 @@ Conjecture nextGEQ_none :
 
 (** ** Space bound *)
 
-(** FIXME: This conjecture is vacuous as stated. [bit_size] is a
-    [Parameter], so the implementation can define it however it likes —
-    e.g. [bit_size _ := 0] — and satisfy the bound without compressing
-    anything. An agent already exploited this (see results/a-20260321T052925).
+(** The bound is stated on a *serialization* of the encoding:
+    [to_bits] lays the encoding out as a bit list, and [of_bits]
+    rebuilds it given the universe [U] and the element count [n]
+    (caller-side context, as usual for succinct data structures).
+    Decoding must succeed from the bit list alone, so every bit of
+    information is counted by [length (to_bits _)] — an implementation
+    cannot satisfy the bound with a fake size function. (An earlier
+    version stated the bound on an abstract [Parameter bit_size],
+    which was vacuous; an agent exploited it with [bit_size _ := 0] —
+    see results/a-20260321T052925.)
 
-    To make this meaningful, [bit_size] should be spec-defined as the
-    actual encoding size (n*l + length(ef_upper)), and [num_lower_bits]
-    should use ceil (Z.log2_up) so the upper bitvector is guaranteed
-    <= 2n bits, matching the standard bound n*(2 + ⌈log₂(U/n)⌉). *)
+    The bound is the standard one (Elias 1974; Vigna, "Quasi-succinct
+    indices", WSDM 2013): n * (2 + ⌈log₂(U/n)⌉) bits, with U/n exact
+    rational division. [ceil_log2] expresses ⌈log₂ q⌉ on rationals;
+    its defining Galois property is proved below, kernel-checked. *)
+
+From Stdlib Require Import QArith Qpower Qround Lia.
+Open Scope Z_scope.  (* QArith puts %Q on top; restore %Z as default *)
+
+(** [ceil_log2 q] = ⌈log₂ q⌉ for q >= 1, clamped to 0 for q <= 1. *)
+Definition ceil_log2 (q : Q) : Z := Z.log2_up (Qceiling q).
+
+(** ⌈log₂ q⌉ is the least k with q <= 2^k. *)
+Lemma ceil_log2_galois :
+  forall (q : Q) (k : Z),
+    (1 <= q)%Q -> 0 <= k ->
+    (ceil_log2 q <= k <-> (q <= inject_Z 2 ^ k)%Q).
+Proof.
+  intros q k Hq Hk.
+  unfold ceil_log2.
+  assert (Hm : 0 < Qceiling q).
+  { pose proof (Qceiling_resp_le 1 q Hq) as H.
+    change (Qceiling 1) with 1%Z in H. lia. }
+  rewrite <- (Z.log2_up_le_pow2 _ k Hm).
+  split.
+  - intros H.
+    eapply Qle_trans; [apply Qle_ceiling|].
+    rewrite <- Zpower_Qpower by exact Hk.
+    rewrite <- Zle_Qle. exact H.
+  - intros H.
+    rewrite <- Zpower_Qpower in H by exact Hk.
+    rewrite <- (Qceiling_Z (2 ^ k)).
+    apply Qceiling_resp_le. exact H.
+Qed.
+
+Parameter to_bits : encoded -> list bool.
+Parameter of_bits : Z -> nat -> list bool -> encoded.
+(** [of_bits U n bits] *)
 
 Conjecture space_bound :
   forall (U : Z) (vals : list Z),
     sorted vals -> all_nonneg vals -> bounded_by U vals ->
     vals <> [] -> 0 < U ->
     let n := Z.of_nat (length vals) in
-    bit_size (encode U vals) <= n * (2 + Z.log2 (U / n)).
+    let bits := to_bits (encode U vals) in
+    decode (of_bits U (length vals) bits) = vals /\
+    Z.of_nat (length bits) <= n * (2 + ceil_log2 (inject_Z U / inject_Z n)).
 
 (** ** Rank and Select on bitvectors *)
 
