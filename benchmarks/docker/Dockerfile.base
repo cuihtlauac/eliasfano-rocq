@@ -1,0 +1,15 @@
+FROM ghcr.io/tarides/ocaml-devcontainer:latest
+
+# Add Rocq/Coq opam repositories
+RUN opam repo add coq-released https://coq.inria.fr/opam/released --all-switches && \
+    opam repo add rocq-released https://rocq-prover.github.io/opam/released/ --all-switches && \
+    opam update
+
+# Install Rocq 9.1.1 (via coq metapackage) and coq-coqutil
+RUN opam install -y coq.9.1.1 coq-coqutil.0.0.7
+
+# Verify
+RUN eval $(opam env) && \
+    coqc --version && \
+    dune --version && \
+    ocamlopt --version

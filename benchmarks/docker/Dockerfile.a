@@ -1,0 +1,22 @@
+FROM eliasfano-bench-base:latest
+
+# Copy spec files and build configuration
+COPY --chown=vscode:vscode tasks/a/ /home/vscode/task/
+
+# Pre-build EliasFanoSpec.vo so the agent doesn't wait
+WORKDIR /home/vscode/task
+RUN eval $(opam env) && dune build theories/EliasFanoSpec.vo
+
+# Workspace is where the agent writes code
+USER root
+RUN mkdir -p /workspace && chown vscode:vscode /workspace
+USER vscode
+
+RUN cp theories/EliasFanoSpec.v /workspace/theories/ 2>/dev/null; \
+    mkdir -p /workspace/theories && \
+    cp theories/EliasFanoSpec.v /workspace/theories/ && \
+    cp theories/dune /workspace/theories/ && \
+    cp dune-project /workspace/ && \
+    cp -r _build /workspace/
+
+WORKDIR /workspace

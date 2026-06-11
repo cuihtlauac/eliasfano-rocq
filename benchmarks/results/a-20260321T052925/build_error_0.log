@@ -1,0 +1,5 @@
+File "./theories/EliasFano.v", line 91, characters 61-62:
+Error:
+In environment
+bv' : list bool
+The term "0" has type "Z" while it is expected to have type "nat".
