@@ -4,3 +4,29 @@ bench/sux/sux-repo/
 bench/sux/bench_sux
 bench/sdsl/sdsl-repo/
 bench/sdsl/bench_sdsl
+
+# Rocq/Coq build artifacts
+*.vo
+*.vok
+*.vos
+*.glob
+*.aux
+.lia.cache
+.nia.cache
+CoqMakefile*
+_CoqProject
+
+# Editor / environment
+.envrc
+.vscode/
+.claude/
+*.swp
+*~
+
+# Runtime / reference PDFs
+trace
+bench/bench_run.log
+papers/
+
+# API run metadata
+benchmarks/results/**/response_*.json
