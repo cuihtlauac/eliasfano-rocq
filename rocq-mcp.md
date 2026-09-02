@@ -22,25 +22,28 @@ The `rocq-mcp` binary needs `rocq` and `pet` on `PATH`. Since the project uses a
 
 ```bash
 #!/bin/bash
-export PATH="/home/cuihtlauac/caml/eliasfano/_opam/bin:$PATH"
-exec /home/cuihtlauac/.local/bin/rocq-mcp "$@"
+# Point this at the project's local opam switch. From the project root:
+#   export PATH="$(pwd)/_opam/bin:$PATH"
+export PATH="$OPAM_SWITCH_PREFIX/bin:$PATH"
+exec rocq-mcp "$@"
 ```
 
 ### Claude Code configuration
 
-The MCP server is declared in the **project-level** settings file `.claude/projects/-home-cuihtlauac-caml-eliasfano/settings.json`:
+The MCP server is declared in the **project-level** Claude Code settings for
+this project (`.claude/projects/<project>/settings.json`):
 
 ```json
 {
   "mcpServers": {
     "rocq-mcp": {
-      "command": "/home/cuihtlauac/.local/bin/rocq-mcp-wrapper"
+      "command": "~/.local/bin/rocq-mcp-wrapper"
     }
   }
 }
 ```
 
-> There is also an older entry in `~/.claude.json` that points directly to `/home/cuihtlauac/.local/bin/rocq-mcp` with an explicit `env.PATH`. The project-level setting (using the wrapper) takes precedence.
+> An older entry in `~/.claude.json` may point directly at `~/.local/bin/rocq-mcp` with an explicit `env.PATH`. The project-level setting (using the wrapper) takes precedence.
 
 ### Available tools
 
