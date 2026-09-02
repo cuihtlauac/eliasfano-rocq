@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+title: "rocq-claude: verified Elias-Fano in Rocq (Proofs as Reviews)"
+abstract: >-
+  A verified implementation of Elias-Fano encoding, produced by an LLM agent
+  (Claude via Claude Code) and mechanically checked by the Rocq proof assistant,
+  demonstrating the "Proofs as Reviews" thesis: machines vibe-code and prove,
+  humans review only the specification. Includes an OCaml/C extraction path and
+  a Docker-based benchmark suite for evaluating LLM agents on verified code
+  generation.
+type: software
+authors:
+  - family-names: "Alvarado"
+    given-names: "Cuihtlauac"
+    affiliation: "Tarides"
+keywords:
+  - "formal verification"
+  - "Rocq"
+  - "Coq"
+  - "Elias-Fano"
+  - "OCaml"
+  - "LLM agents"
+  - "proofs as reviews"
+license: MIT
+repository-code: "https://github.com/cuihtlauac/eliasfano"
+year: 2026
