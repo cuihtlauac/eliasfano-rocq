@@ -1,4 +1,4 @@
-# rocq-claude — verified Elias-Fano in Rocq
+# eliasfano-rocq — verified Elias-Fano in Rocq
 
 [Elias-Fano](https://en.wikipedia.org/wiki/Elias%E2%80%93Fano_coding) is a
 near-optimal encoding for monotone sequences of natural numbers — it stores a
